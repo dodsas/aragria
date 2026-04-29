@@ -25,7 +25,9 @@ body {
 #app {
   display: grid;
   grid-template-columns: 320px 1fr;
+  grid-template-rows: 1fr;
   height: 100vh;
+  overflow: hidden;
 }
 
 /* ── Viewport (text MUD) ───────────────────────────────── */
@@ -34,6 +36,7 @@ body {
   flex-direction: column;
   border-left: 1px solid var(--border);
   min-width: 0;
+  overflow: hidden; /* 뷰포트 자체가 팽창하지 않도록 — #log가 내부 스크롤을 담당 */
 }
 #log {
   flex: 1;
@@ -46,6 +49,7 @@ body {
 #log .line.system { color: var(--accent); }
 #log .line.echo { color: var(--fg-dim); }
 #log .line.error { color: var(--danger); }
+#log .monster-name { color: #d95f7a; }
 
 /* ── Object view panel (UI for "looked-at" objects) ───── */
 #object-view {
@@ -77,6 +81,7 @@ body {
 
 /* ── Prompt ─────────────────────────────────────────────── */
 #prompt-form {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -144,6 +149,70 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
 .status-block li .slot { color: var(--fg-dim); font-size: 11px; }
 .status-block li .qty { color: var(--fg-dim); }
 .status-block li.empty { color: var(--fg-dim); font-style: italic; }
+.status-block li[data-item-id] {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.1s;
+}
+.status-block li[data-item-id]:hover { background: var(--bg-elev); }
+.status-block li[data-item-id]:active { background: var(--accent-soft); }
+
+/* ── Map ───────────────────────────────────────────────── */
+#map-canvas {
+  position: relative;
+  width: 150px;   /* VIEWPORT_COLS(3) × COL_STEP(50) */
+  height: 102px;  /* 3×ROW_STEP(28) + ROOM_H(18) */
+  overflow: hidden;
+  margin: 0 auto;
+}
+#map-inner {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transition: transform 0.25s ease;
+}
+.map-room {
+  position: absolute;
+  width: 64px;
+  height: 24px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-dim);
+  transition: border-color 0.2s, color 0.2s;
+  user-select: none;
+}
+.map-room.current {
+  border-color: var(--accent-soft);
+  color: var(--accent);
+  background: var(--bg-elev);
+}
+.map-room.forest {
+  background: #0c150c;
+  border-color: #243324;
+  color: #4a6e4a;
+}
+.map-room.forest.current {
+  border-color: #3a6a3a;
+  color: #7ab87a;
+  background: #132013;
+}
+#map-player {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 10px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 50%;
+  pointer-events: none;
+  transition: transform 0.25s ease;
+  box-shadow: 0 0 6px var(--accent);
+}
 
 #status-footer {
   margin-top: auto;

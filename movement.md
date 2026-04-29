@@ -41,9 +41,9 @@ D → east  (동)
 ## 구현 위치
 
 - **클라이언트:** `public/client.js`
-  - 상수 `WASD_DIR` — WASD → 방향 이름 매핑.
+  - 상수 `WASD_DIR` — `e.code` 기반 물리 키 위치 → 방향 이름 매핑 (`KeyW/A/S/D`). `e.key` 대신 `e.code`를 사용해 한국어 IME나 키보드 레이아웃과 무관하게 동작.
   - 상태 변수 `mode` — `'typing' | 'move'`.
-  - `setMode(next)` — DOM(`body[data-mode]`, 배지, 프롬프트 글리프, 입력 disabled/focus)을 한 곳에서 갱신.
+  - `setMode(next)` — DOM(`body[data-mode]`, 배지, 프롬프트 글리프, 입력 disabled/focus) 및 `document.body.focus()`를 한 곳에서 갱신. 이동 모드 진입 시 `body`에 포커스를 명시적으로 넘겨 키이벤트 전달을 보장.
   - `document.keydown` 글로벌 리스너 — ESC 토글, 그리고 move 모드에서만 WASD 디스패치.
 - **CSS:** `public/style.css`
   - `body[data-mode="move"]` 셀렉터 아래에 시각 큐(프롬프트 글리프 색, 가장자리 그라데이션) 정의.

@@ -48,17 +48,26 @@ function connect() {
 
 function handleMessage(msg) {
   switch (msg.type) {
-    case 'text':   appendLine(msg.text, 'line'); break;
+    case 'text':   appendLine(msg.segments ?? msg.text, 'line'); break;
     case 'system': appendLine(msg.text, 'line system'); break;
     case 'status': renderStatus(msg.status); break;
     case 'view':   renderObjectView(msg.view); break;
   }
 }
 
-function appendLine(text, cls = 'line') {
+function appendLine(content, cls = 'line') {
   const div = document.createElement('div');
   div.className = cls;
-  div.textContent = text;
+  if (Array.isArray(content)) {
+    for (const seg of content) {
+      const span = document.createElement('span');
+      span.textContent = seg.text;
+      if (seg.cls) span.className = seg.cls;
+      div.appendChild(span);
+    }
+  } else {
+    div.textContent = content;
+  }
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -84,6 +93,8 @@ function renderStatus(status) {
     equipmentEl.appendChild(li);
   }
 
+  if (status.roomId) updateMapPlayer(status.roomId);
+
   inventoryEl.innerHTML = '';
   const items = status.inventory || [];
   if (items.length === 0) {
@@ -98,6 +109,7 @@ function renderStatus(status) {
       li.querySelector('.icon').textContent = it.icon || '·';
       li.querySelector('.name').textContent = it.name;
       li.querySelector('.qty').textContent = it.qty > 1 ? `×${it.qty}` : '';
+      if (it.id) li.dataset.itemId = it.id;
       inventoryEl.appendChild(li);
     }
   }
@@ -107,6 +119,7 @@ function renderObjectView(view) {
   if (!view) {
     objectViewEl.hidden = true;
     objectViewEl.innerHTML = '';
+    logEl.scrollTop = logEl.scrollHeight;
     return;
   }
   objectViewEl.hidden = false;
@@ -153,6 +166,7 @@ function renderObjectView(view) {
     lore.textContent = view.lore;
     objectViewEl.appendChild(lore);
   }
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
 function sendCmd(input) {
@@ -163,20 +177,42 @@ function sendCmd(input) {
   }
 }
 
+const cmdHistory = [];
+let historyIdx = -1;
+
 promptForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const input = promptInput.value.trim();
   if (!input) return;
+  cmdHistory.unshift(input);
+  if (cmdHistory.length > 10) cmdHistory.pop();
+  historyIdx = -1;
   appendLine(`> ${input}`, 'line echo');
   sendCmd(input);
   promptInput.value = '';
+});
+
+promptInput.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (cmdHistory.length === 0) return;
+    historyIdx = Math.min(historyIdx + 1, cmdHistory.length - 1);
+    promptInput.value = cmdHistory[historyIdx];
+    promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+  } else if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    historyIdx = Math.max(historyIdx - 1, -1);
+    promptInput.value = historyIdx === -1 ? '' : cmdHistory[historyIdx];
+    promptInput.setSelectionRange(promptInput.value.length, promptInput.value.length);
+  }
 });
 
 // ── Movement mode ─────────────────────────────────────────
 // ESC toggles between TYPING and MOVE.
 //   TYPING: input focused, normal command entry.
 //   MOVE:   input blurred+disabled, WASD sends directional commands.
-const WASD_DIR = { w: 'north', a: 'west', s: 'south', d: 'east' };
+// e.code (물리 키 위치) 사용 — e.key는 IME·키보드 레이아웃에 따라 달라짐
+const WASD_DIR = { KeyW: 'north', KeyA: 'west', KeyS: 'south', KeyD: 'east' };
 let mode = 'typing';
 
 function setMode(next) {
@@ -194,6 +230,7 @@ function setMode(next) {
     promptInput.disabled = true;
     promptInput.placeholder = '이동 모드 — WASD로 이동, ESC로 입력 모드';
     promptInput.blur();
+    document.body.focus(); // 이동 모드에서 키이벤트가 document까지 확실히 전달되도록
   }
 }
 
@@ -203,15 +240,142 @@ document.addEventListener('keydown', (e) => {
     setMode(mode === 'typing' ? 'move' : 'typing');
     return;
   }
+  if (e.key === 'Enter' && mode === 'move') {
+    e.preventDefault();
+    setMode('typing');
+    return;
+  }
   if (mode !== 'move') return;
   // Ignore modifier combos so browser shortcuts still work.
   if (e.ctrlKey || e.metaKey || e.altKey) return;
-  const dir = WASD_DIR[e.key.toLowerCase()];
+  const dir = WASD_DIR[e.code];
   if (!dir) return;
   e.preventDefault();
   appendLine(`> [이동] ${dir}`, 'line echo');
   sendCmd(`go ${dir}`);
 });
 
+// ── Map ─────────────────────────────────────────────────
+const ROOM_W = 60, ROOM_H = 22, COL_STEP = 96, ROW_STEP = 34, VIEWPORT_COLS = 3;
+// col/row: grid position. x/y: pixel position inside the scrollable inner container.
+const MAP_ROOMS = {
+  market:     { x:   0, y:  0, label: '시장',  col: 0 },
+  square:     { x:   0, y: 34, label: '광장',  col: 0 },
+  temple:     { x:  96, y: 34, label: '신전',  col: 1 },
+  forest_0_0: { x: 192, y:  34, label: '숲', cls: 'forest', col: 2 },
+  forest_1_0: { x: 288, y:  34, label: '숲', cls: 'forest', col: 3 },
+  forest_2_0: { x: 384, y:  34, label: '숲', cls: 'forest', col: 4 },
+  forest_0_1: { x: 192, y:  68, label: '숲', cls: 'forest', col: 2 },
+  forest_1_1: { x: 288, y:  68, label: '숲', cls: 'forest', col: 3 },
+  forest_2_1: { x: 384, y:  68, label: '숲', cls: 'forest', col: 4 },
+  forest_0_2: { x: 192, y: 102, label: '숲', cls: 'forest', col: 2 },
+  forest_1_2: { x: 288, y: 102, label: '숲', cls: 'forest', col: 3 },
+  forest_2_2: { x: 384, y: 102, label: '숲', cls: 'forest', col: 4 },
+};
+const MAP_CONNS = [
+  ['market',     'square'],
+  ['square',     'temple'],
+  ['temple',     'forest_0_0'],
+  ['forest_0_0', 'forest_1_0'], ['forest_1_0', 'forest_2_0'],
+  ['forest_0_1', 'forest_1_1'], ['forest_1_1', 'forest_2_1'],
+  ['forest_0_2', 'forest_1_2'], ['forest_1_2', 'forest_2_2'],
+  ['forest_0_0', 'forest_0_1'], ['forest_0_1', 'forest_0_2'],
+  ['forest_1_0', 'forest_1_1'], ['forest_1_1', 'forest_1_2'],
+  ['forest_2_0', 'forest_2_1'], ['forest_2_1', 'forest_2_2'],
+];
+
+function buildMap() {
+  const canvas = document.getElementById('map-canvas');
+
+  const inner = document.createElement('div');
+  inner.id = 'map-inner';
+  canvas.appendChild(inner);
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', 5 * COL_STEP);
+  svg.setAttribute('height', 3 * ROW_STEP + ROOM_H);
+  svg.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none';
+
+  for (const [a, b] of MAP_CONNS) {
+    const ra = MAP_ROOMS[a], rb = MAP_ROOMS[b];
+    const ax = ra.x + ROOM_W / 2, ay = ra.y + ROOM_H / 2;
+    const bx = rb.x + ROOM_W / 2, by = rb.y + ROOM_H / 2;
+    let x1, y1, x2, y2;
+    if (Math.abs(ax - bx) >= Math.abs(ay - by)) {
+      [x1, y1, x2, y2] = ax < bx ? [ra.x + ROOM_W, ay, rb.x, by] : [ra.x, ay, rb.x + ROOM_W, by];
+    } else {
+      [x1, y1, x2, y2] = ay < by ? [ax, ra.y + ROOM_H, bx, rb.y] : [ax, ra.y, bx, rb.y + ROOM_H];
+    }
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', x1); line.setAttribute('y1', y1);
+    line.setAttribute('x2', x2); line.setAttribute('y2', y2);
+    line.setAttribute('stroke', 'var(--border)');
+    line.setAttribute('stroke-width', '1.5');
+    svg.appendChild(line);
+  }
+  inner.appendChild(svg);
+
+  for (const [id, room] of Object.entries(MAP_ROOMS)) {
+    const div = document.createElement('div');
+    div.className = 'map-room' + (room.cls ? ` ${room.cls}` : '');
+    div.dataset.room = id;
+    div.textContent = room.label;
+    div.style.left = `${room.x}px`;
+    div.style.top = `${room.y}px`;
+    inner.appendChild(div);
+  }
+
+  const marker = document.createElement('div');
+  marker.id = 'map-player';
+  inner.appendChild(marker);
+}
+
+let mapReady = false;
+let camCol = 0;
+
+function updateMapPlayer(roomId) {
+  const room = MAP_ROOMS[roomId];
+  if (!room) return;
+
+  for (const el of document.querySelectorAll('.map-room')) {
+    el.classList.toggle('current', el.dataset.room === roomId);
+  }
+
+  // slide camera to keep player in the 4-wide viewport
+  const col = room.col;
+  if (col >= camCol + VIEWPORT_COLS) camCol = col - VIEWPORT_COLS + 1;
+  else if (col < camCol) camCol = col;
+
+  const marker = document.getElementById('map-player');
+  const inner  = document.getElementById('map-inner');
+  const mx = room.x + ROOM_W / 2 - 5;
+  const my = room.y + ROOM_H / 2 - 5;
+
+  if (!mapReady) {
+    marker.style.transition = 'none';
+    inner.style.transition  = 'none';
+    marker.style.transform = `translate(${mx}px, ${my}px)`;
+    inner.style.transform  = `translateX(${-camCol * COL_STEP}px)`;
+    requestAnimationFrame(() => {
+      marker.style.transition = '';
+      inner.style.transition  = '';
+      mapReady = true;
+    });
+  } else {
+    marker.style.transform = `translate(${mx}px, ${my}px)`;
+    inner.style.transform  = `translateX(${-camCol * COL_STEP}px)`;
+  }
+}
+
+// ── Inventory click (event delegation) ──────────────────
+inventoryEl.addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-item-id]');
+  if (!li) return;
+  const id = li.dataset.itemId;
+  appendLine(`> use ${id}`, 'line echo');
+  sendCmd(`use ${id}`);
+});
+
+buildMap();
 setMode('typing');
 connect();

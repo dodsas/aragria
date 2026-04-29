@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm start *)",
+      "Bash(pkill -f \"node server/index.js\")",
+      "Bash(npm run *)"
+    ]
+  }
+}
