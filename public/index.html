@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>Aragria</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main id="app">
+    <aside id="sidebar">
+      <header id="status-header">
+        <span id="status-name">접속 중...</span>
+      </header>
+      <section class="status-block">
+        <h2>장비</h2>
+        <ul id="equipment"></ul>
+      </section>
+      <section class="status-block">
+        <h2>아이템</h2>
+        <ul id="inventory"></ul>
+      </section>
+      <footer id="status-footer">
+        <span id="conn-status" class="off">연결 끊김</span>
+      </footer>
+    </aside>
+    <section id="viewport">
+      <div id="log" aria-live="polite"></div>
+      <div id="object-view" hidden></div>
+      <form id="prompt-form" autocomplete="off">
+        <span class="prompt-glyph" id="mode-glyph">&gt;</span>
+        <input id="prompt" name="prompt" type="text" placeholder="명령 입력 — ESC로 이동 모드 전환" autofocus />
+        <span id="mode-badge" class="mode-typing">TYPING</span>
+      </form>
+    </section>
+  </main>
+  <script src="/client.js"></script>
+</body>
+</html>
