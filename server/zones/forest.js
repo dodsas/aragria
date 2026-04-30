@@ -127,5 +127,10 @@ export default {
     },
   },
 
-  spawns: [],
+  spawns: [
+    // 숲의 심장 — 검은 제단이 깨어난 자리. 보스급 비룡(tier 2) 한 마리.
+    { roomId: 'forest_4_4', defId: 'dragon' },
+    // 부서진 사당 — 사당이 무너진 까닭이 이 비룡이라는 설정. 더 공격적이고 HP는 낮음.
+    { roomId: 'forest_0_4', defId: 'red_dragon' },
+  ],
 };

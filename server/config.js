@@ -5,10 +5,17 @@
 // delay drawn uniformly from this range.
 export const MONSTER_RESPAWN_MS = {
   1: [10_000, 30_000],
+  // tier 2: 보스급 — 2~5분. 짧으면 같은 자리에 재출현이 너무 잦아 위협감이 사라진다.
+  2: [120_000, 300_000],
 };
 
 // Default tier used when a monster definition omits `tier`.
 export const DEFAULT_MONSTER_TIER = 1;
+
+// 몬스터 자가 회복 틱 주기(ms). 너무 짧으면 같은 룸 N명 × 룸 수만큼 1초 안에
+// 다중 broadcast가 누적되고, 너무 길면 회복이 끊겨 보인다. 1초가 자연스럽고
+// 1k 동시 접속 목표에도 안전.
+export const MONSTER_REGEN_TICK_MS = 1000;
 
 // Minimum interval (ms) between consecutive `attack` commands for a single
 // player. The server is authoritative — clients may render a cooldown UI for
@@ -71,6 +78,18 @@ export const CONN_RATE_LIMIT = 6;
 export const RECONNECT_GRACE_MS = 30_000;
 
 // --- Character creation ---
+
+// 등록 절차 활성/비활성 토글. true면 신규 접속자에게 welcome 모달을 띄워
+// 이름·특징을 받고, false면 모달 없이 `방랑자-{id}` + 디폴트 묘사로 즉시
+// 자동 등록한다. 비활성화는 데모/시연·자동화 테스트·프로필 수집을 일시적으로
+// 끄고 싶을 때 사용. 클라이언트는 이 플래그를 모르며, welcome 메시지의 유무가
+// 그대로 신호 역할을 한다.
+export const REGISTRATION_ENABLED = false;
+
+// 자동 등록 시 사용할 디폴트 묘사. DESC_MIN_LEN 이상이어야 하고, 분류기가
+// "wanderer" archetype + "leather" 팔레트로 안정적으로 매핑할 수 있는 한국어
+// 키워드(떠돌이)를 포함한다.
+export const AUTO_REGISTER_DESC = '낯선 곳에 막 도착한 떠돌이.';
 
 // Length bounds for the adventurer name (in characters, after trim).
 export const NAME_MIN_LEN = 1;

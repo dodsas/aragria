@@ -2,14 +2,15 @@
 // All commands flow through Game.handleCommand(player, input).
 
 import {
-  MONSTER_RESPAWN_MS, DEFAULT_MONSTER_TIER,
+  MONSTER_RESPAWN_MS, DEFAULT_MONSTER_TIER, MONSTER_REGEN_TICK_MS,
   ATTACK_COOLDOWN_MS, MOVE_COOLDOWN_MS, KILLSTEAL_MOVE_BLOCK_MS,
   INPUT_MAX_LEN, SAY_MAX_LEN, SAY_COOLDOWN_MS,
   CMD_RATE_PER_SEC, CMD_BURST, RECONNECT_GRACE_MS,
   NAME_MAX_LEN, NAME_MIN_LEN, DESC_MAX_LEN, DESC_MIN_LEN,
+  REGISTRATION_ENABLED, AUTO_REGISTER_DESC,
 } from './config.js';
 import { loadZones } from './zones/index.js';
-import { generateCharacterSprite } from './sprite.js';
+import { generateCharacterSprite, getDefaultCharacterSprite } from './sprite.js';
 
 let nextPlayerId = 1;
 
@@ -23,20 +24,36 @@ const { rooms: ROOMS, objects: OBJECTS, spawns: INITIAL_SPAWNS } = loadZones();
 
 // Monster definitions. `tier` controls respawn timing (see config.js).
 // Tier 1 = lowest. Higher tiers can be added later with their own respawn ranges.
+// hpRegen은 초당 자가 회복량. 0이면 회복 없음. 회복은 전투 중에도 적용되며,
+// 모든 동일 룸 플레이어에게 동기 브로드캐스트된다(monster.md 회복 절 참조).
 const MONSTER_DEFS = {
   goblin: {
     tier: 1,
     name: '고블린',
     icon: '🧌',
     desc: '작고 교활한 눈빛의 녹색 생명체. 녹슨 단검을 들고 있다.',
-    hp: 20, maxHp: 20, atk: 5,
+    hp: 20, maxHp: 20, atk: 5, hpRegen: 1,
   },
   skeleton: {
     tier: 1,
     name: '해골 전사',
     icon: '☠',
     desc: '낡은 갑옷을 입은 뼈만 남은 전사. 텅 빈 눈구멍에서 붉은 빛이 흔들린다.',
-    hp: 35, maxHp: 35, atk: 8,
+    hp: 35, maxHp: 35, atk: 8, hpRegen: 1,
+  },
+  dragon: {
+    tier: 2,
+    name: '검은 비룡',
+    icon: '🐉',
+    desc: '숲 속 검은 제단에서 깨어난 비룡. 그을음으로 새카만 비늘 사이로 노란 눈이 어둠을 가른다.',
+    hp: 120, maxHp: 120, atk: 18, hpRegen: 3,
+  },
+  red_dragon: {
+    tier: 2,
+    name: '붉은 비룡',
+    icon: '🐲',
+    desc: '부서진 사당에 둥지를 튼 비룡. 비늘은 잿불처럼 붉고, 콧김에서 마른 연기가 새어나온다.',
+    hp: 100, maxHp: 100, atk: 22, hpRegen: 3,
   },
 };
 
@@ -52,6 +69,8 @@ function spawnMonster(defId) {
     maxHp: def.maxHp,
     atk: def.atk,
     tier: def.tier ?? DEFAULT_MONSTER_TIER,
+    // 초당 자가 회복량. 정의에서 미지정이면 0으로 떨어져 회복 비활성화.
+    hpRegen: def.hpRegen ?? 0,
   };
 }
 
@@ -88,6 +107,63 @@ export class Game {
     this.sidToPlayer = new Map();
     this.roomMonsters = new Map();
     this._spawnMonsters();
+    this._startRegenTick();
+  }
+
+  // 1초 주기 자가 회복 틱. 회복이 일어난 방에 한해 broadcast하고, 같은
+  // 몬스터를 교전 중인 플레이어에게는 combat 패널까지 갱신해 HP 바가 차오르는
+  // 모습을 실시간으로 본다. 1k 동시 접속 목표를 고려해 변화 없는 방은 침묵.
+  // .unref()로 묶어 테스트/임시 종료 시 프로세스 잔존을 막는다.
+  _startRegenTick() {
+    const tick = MONSTER_REGEN_TICK_MS;
+    const perTickRatio = tick / 1000;
+    const interval = setInterval(() => this._regenTick(perTickRatio), tick);
+    if (typeof interval.unref === 'function') interval.unref();
+  }
+
+  _regenTick(perTickRatio) {
+    for (const [roomId, monsters] of this.roomMonsters) {
+      let anyChanged = false;
+      for (const m of monsters) {
+        if (m.dead) continue;
+        if (m.hp >= m.maxHp) continue;
+        const rate = m.hpRegen || 0;
+        if (rate <= 0) continue;
+        const before = m.hp;
+        // 정수 HP 유지 — round로 누적 오차를 흡수. 작은 rate(1/sec)에서도
+        // 최소 1 이상 회복되도록 1초 틱 기준으로는 그대로 정수가 더해진다.
+        const next = Math.min(m.maxHp, m.hp + Math.max(1, Math.round(rate * perTickRatio)));
+        if (next === before) continue;
+        m.hp = next;
+        anyChanged = true;
+        // 교전 중인 플레이어들에게 combat 패널 갱신 — HP 바가 다시 차오르는
+        // 모습이 즉시 반영되도록.
+        const engagementKey = `m${m.id}`;
+        for (const p of this.players.values()) {
+          if (p.combatTargetId !== engagementKey) continue;
+          if (p.roomId !== roomId) continue;
+          this.pushCombat(p, m, 'monster');
+        }
+      }
+      if (anyChanged) this._pushRoomMonsters(roomId);
+    }
+  }
+
+  // 같은 방의 모든 플레이어(교전·비교전 무관)에게 현재 룸 몬스터 스냅샷을
+  // 보낸다. 클라이언트는 이 메시지로 대기화면(=비전투)에서도 몬스터 HP 바를
+  // 갱신한다. dead 플래그가 선 항목은 곧 splice될 예정이라 제외해 패널이
+  // 깜빡이지 않도록 한다.
+  _pushRoomMonsters(roomId) {
+    const list = this.roomMonsters.get(roomId) || [];
+    const monsters = [];
+    for (const m of list) {
+      if (m.dead) continue;
+      monsters.push({
+        id: m.id, defId: m.defId, name: m.name, icon: m.icon,
+        hp: Math.max(0, m.hp), maxHp: m.maxHp,
+      });
+    }
+    this.broadcastRoom(roomId, { type: 'room_monsters', roomId, monsters });
   }
 
   _spawnMonsters() {
@@ -114,6 +190,8 @@ export class Game {
         type: 'text',
         segments: [{ text: def.name, cls: 'monster-name' }, { text: '이(가) 나타났다.' }],
       });
+      // 새 인스턴스가 추가됐으니 룸 몬스터 패널도 갱신.
+      this._pushRoomMonsters(roomId);
     }, delay);
   }
 
@@ -180,11 +258,19 @@ export class Game {
           // Stub mid-sprite-generation. Don't reset the modal back to the
           // form — the in-flight generation is still running and a fresh
           // `register` would hit the re-entry guard. Re-show the progress UI
-          // so the reloaded client knows we're still working.
-          this.send(existing, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
-        } else {
+          // so the reloaded client knows we're still working. (Skipped when
+          // registration is disabled: there's no modal to re-show.)
+          if (REGISTRATION_ENABLED) {
+            this.send(existing, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
+          }
+        } else if (REGISTRATION_ENABLED) {
           // Stub player resumed before completing registration — re-prompt.
           this.send(existing, { type: 'welcome' });
+        } else {
+          // Disabled mode: a stub that came back without a registered state
+          // (auto-register lost mid-flight, or a sid registered before the
+          // flag was flipped). Re-arm auto-registration silently.
+          this._autoRegisterStub(existing);
         }
         return existing;
       }
@@ -278,8 +364,32 @@ export class Game {
     this.players.set(id, player);
     if (sid) this.sidToPlayer.set(sid, player);
 
-    this.send(player, { type: 'welcome' });
+    if (REGISTRATION_ENABLED) {
+      this.send(player, { type: 'welcome' });
+    } else {
+      // 등록 절차가 비활성화된 모드. welcome 모달을 띄우지 않고, 백그라운드에서
+      // 자동 등록을 점화한다. 분류기 + 합성기 한 사이클(보통 1~3초) 후 플레이어가
+      // 광장에 도착한다. 그 사이 사용자는 빈 화면을 보지 않도록 한 줄짜리 진입
+      // 안내만 시스템 텍스트로 흘려준다.
+      this.send(player, { type: 'system', text: '아라그리아에 진입하는 중...' });
+      this._autoRegisterStub(player);
+    }
     return player;
+  }
+
+  // Fire-and-forget auto-registration. Used when REGISTRATION_ENABLED=false to
+  // promote a fresh stub straight into the world without going through the
+  // welcome modal. The name is keyed by the monotonic player id so duplicate
+  // checks inside registerPlayer never collide. Description is fixed in config
+  // so the classifier maps everyone to the same wanderer-class character —
+  // intentional: in disabled mode all auto players look like the default
+  // outlander archetype.
+  _autoRegisterStub(player) {
+    const autoName = `방랑자-${player.id}`;
+    // useDefaultSprite: 첫 자동 등록자에서 만들어진 SVG를 모듈 레벨에 캐싱해
+    // 두 번째 접속부터는 generate를 다시 돌리지 않고 같은 이미지를 즉시 사용.
+    this.registerPlayer(player, autoName, AUTO_REGISTER_DESC, { silent: true, useDefaultSprite: true })
+      .catch((err) => console.error('auto-register failed', err));
   }
 
   // Promote a stub player to a fully registered character. Sprite generation
@@ -287,13 +397,16 @@ export class Game {
   // would otherwise render the default sprite for ~30s and then visibly swap
   // when the AI call returned. The wait is surfaced via `register_progress`
   // so the welcome modal can show a "drawing" state instead of looking frozen.
-  async registerPlayer(player, name, description) {
+  async registerPlayer(player, name, description, opts = {}) {
+    // Internal auto-register path passes `silent: true` so progress/error
+    // notifications don't pop the welcome modal back open in disabled mode.
+    const silent = !!opts.silent;
     if (player.registered) return;
     // Single-flight: while one register is mid-await, drop additional ones.
     // Resend the progress UI so a reloaded client doesn't think the second
     // press did nothing.
     if (player.generating) {
-      this.send(player, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
+      if (!silent) this.send(player, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
       return;
     }
 
@@ -305,7 +418,7 @@ export class Game {
     // and nothing else. `register_error` keeps the modal up and surfaces the
     // reason inline.
     if (cleanName.length < NAME_MIN_LEN || cleanDesc.length < DESC_MIN_LEN) {
-      this.send(player, { type: 'register_error', text: `이름은 ${NAME_MIN_LEN}~${NAME_MAX_LEN}자, 특징은 ${DESC_MIN_LEN}~${DESC_MAX_LEN}자로 입력하세요.` });
+      if (!silent) this.send(player, { type: 'register_error', text: `이름은 ${NAME_MIN_LEN}~${NAME_MAX_LEN}자, 특징은 ${DESC_MIN_LEN}~${DESC_MAX_LEN}자로 입력하세요.` });
       return;
     }
     // Reject duplicate live names so attack/look targeting (exact-match) stays
@@ -316,7 +429,7 @@ export class Game {
       if (p.id === player.id) continue;
       if (p.name !== cleanName) continue;
       if (p.registered || p.generating) {
-        this.send(player, { type: 'register_error', text: '같은 이름의 모험가가 이미 있습니다.' });
+        if (!silent) this.send(player, { type: 'register_error', text: '같은 이름의 모험가가 이미 있습니다.' });
         return;
       }
     }
@@ -326,11 +439,16 @@ export class Game {
     player.name = cleanName;
     player.description = cleanDesc;
     player.generating = true;
-    this.send(player, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
+    if (!silent) this.send(player, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
 
     let svg = null;
     try {
-      svg = await generateCharacterSprite(cleanName, cleanDesc);
+      // 자동 등록 경로(스킵 모드)는 이름만 다르고 description이 늘 같아 합성
+      // 결과도 동일하다. 매 접속마다 LLM 분류·합성을 새로 돌리지 않도록 모듈
+      // 캐시된 디폴트 SVG를 재사용한다. 첫 호출만 generate가 실행된다.
+      svg = opts.useDefaultSprite
+        ? await getDefaultCharacterSprite(cleanDesc)
+        : await generateCharacterSprite(cleanName, cleanDesc);
     } finally {
       player.generating = false;
     }
@@ -389,8 +507,10 @@ export class Game {
   handleCommand(player, raw) {
     // Stub players (pre-registration) can't issue any text commands —
     // everything routes through the welcome modal until they register.
+    // In disabled mode there's no modal: auto-registration is in flight, so
+    // drop the input silently and let it complete (the user will retry).
     if (!player.registered) {
-      this.send(player, { type: 'welcome' });
+      if (REGISTRATION_ENABLED) this.send(player, { type: 'welcome' });
       return;
     }
     // Global per-player rate limit. Token bucket refilled lazily; drops
@@ -464,6 +584,12 @@ export class Game {
     if (others) this.send(player, { type: 'text', text: `이곳에 있는 사람: ${others}` });
     this.send(player, { type: 'text', text: `출구: ${exits}` });
     this.send(player, { type: 'view', view: null });
+    // 대기화면 룸 몬스터 패널을 즉시 채운다. 이전 방의 잔존 항목이 있어도
+    // 새 룸 스냅샷(빈 배열일 수 있음)으로 덮어써 깨끗하게 갱신.
+    const roomMonsterList = (this.roomMonsters.get(room.id) || [])
+      .filter(m => !m.dead)
+      .map(m => ({ id: m.id, defId: m.defId, name: m.name, icon: m.icon, hp: Math.max(0, m.hp), maxHp: m.maxHp }));
+    this.send(player, { type: 'room_monsters', roomId: room.id, monsters: roomMonsterList });
   }
 
   // Resolution order: self-shortcuts → room objects → monsters → players in
@@ -794,6 +920,8 @@ export class Game {
       this.seg(player, [{ text: target.name, cls: 'monster-name' }, { text: '이(가) 쓰러졌다!' }]);
       this.pushCombat(player, target, 'monster', 'foe');
       player.combatTargetId = null;
+      // 죽은 몬스터를 룸 몬스터 패널에서 즉시 제거.
+      this._pushRoomMonsters(roomId);
       if (killStealVictimName) {
         // Anti-grief: kill-stealer can't immediately walk away. Cancel any
         // queued move first — otherwise it would auto-fire under the block.
@@ -820,13 +948,20 @@ export class Game {
     ]);
 
     if (player.hp <= 0) {
+      const fromRoom = player.roomId;
       this.send(player, { type: 'system', text: '의식을 잃고 쓰러졌다...' });
       this.pushCombat(player, target, 'monster', 'me');
       this._respawnAtSquare(player);
+      // _respawnAtSquare가 player.roomId를 광장으로 바꾸므로 사전에 잡아둔
+      // fromRoom으로 패널을 갱신해야 한다 — 같은 방의 다른 플레이어들이 살아
+      // 남은 몬스터의 변동된 HP를 본다.
+      this._pushRoomMonsters(fromRoom);
       return;
     }
     this.pushCombat(player, target, 'monster');
     this.pushStatus(player);
+    // 비교전 룸메이트도 HP 바 변화를 보도록 룸 전체에 갱신 푸시.
+    this._pushRoomMonsters(player.roomId);
   }
 
   // PvP: attacker hits target once. Defender does NOT auto-counter — they

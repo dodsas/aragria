@@ -1,6 +1,7 @@
 const logEl = document.getElementById('log');
 const objectViewEl = document.getElementById('object-view');
 const combatViewEl = document.getElementById('combat-view');
+const roomMonstersEl = document.getElementById('room-monsters');
 const promptForm = document.getElementById('prompt-form');
 const promptInput = document.getElementById('prompt');
 const equipmentEl = document.getElementById('equipment');
@@ -113,6 +114,7 @@ function handleMessage(msg) {
     case 'status':  renderStatus(msg.status); hideWelcome(); break;
     case 'view':    renderObjectView(msg.view); break;
     case 'combat':  renderCombat(msg.combat); break;
+    case 'room_monsters': renderRoomMonsters(msg.monsters || []); break;
     case 'welcome': showWelcome(); break;
     case 'register_progress': showRegisterProgress(msg.text || '캐릭터를 그리는 중입니다…'); break;
     case 'register_error': showRegisterError(msg.text || '등록할 수 없습니다.'); break;
@@ -257,9 +259,41 @@ function renderCombat(combat) {
   }
 }
 
+// 룸 몬스터 라이브 HP 패널. 서버의 `room_monsters` 메시지로 갱신되며, 같은
+// 방의 모든 플레이어가(전투 중이든 아니든) 동일한 HP 값을 본다. 자가 회복
+// 틱이 일어나면 HP 바가 다시 차오르고, 공격이 들어오면 즉시 줄어든다.
+function renderRoomMonsters(monsters) {
+  if (!roomMonstersEl) return;
+  if (!monsters || monsters.length === 0) {
+    roomMonstersEl.hidden = true;
+    roomMonstersEl.innerHTML = '';
+    return;
+  }
+  roomMonstersEl.hidden = false;
+  // innerHTML 한 번에 갈아끼우는 편이 row별 diff 보다 단순. 패널 크기상
+  // DOM 재생성 비용은 무시 가능하고, 깜빡임은 row 단위가 아니라 전체 단위로만
+  // 일어나기 때문에 시각적으로도 더 일관됨.
+  const cells = 12;
+  const rows = monsters.map((m) => {
+    const max = Math.max(1, m.maxHp || 1);
+    const hp = Math.max(0, Math.min(max, m.hp || 0));
+    const filled = Math.round((hp / max) * cells);
+    const blocks = '█'.repeat(filled) + '░'.repeat(cells - filled);
+    const fullCls = hp >= max ? ' rm-full' : '';
+    return `<div class="rm-row">`
+      + `<span class="rm-name">${escapeHtml(m.name || '?')}</span>`
+      + `<span class="rm-bar${fullCls}"><span class="rm-bracket">[</span><span class="rm-blocks">${blocks}</span><span class="rm-bracket">]</span></span>`
+      + `<span class="rm-num">${hp} / ${max}</span>`
+      + `</div>`;
+  }).join('');
+  roomMonstersEl.innerHTML = `<div class="rm-header">이 방의 적</div>${rows}`;
+}
+
 const MONSTER_SPRITES = {
   goblin: () => goblinSpriteSvg(),
   skeleton: () => skeletonSpriteSvg(),
+  dragon: () => dragonSpriteSvg(),
+  red_dragon: () => redDragonSpriteSvg(),
 };
 
 function makeCombatActor(actor, isFoe, isFallen, isHurt, killerName = null, kind = 'monster') {
@@ -487,6 +521,106 @@ function skeletonSpriteSvg() {
     <path d="M36,22 Q32,12 28,10 Q32,18 36,22 Z" fill="#4a3a2a" stroke="#1a1a22" stroke-width="0.4"/>
     <path d="M64,22 Q68,12 72,10 Q68,18 64,22 Z" fill="#4a3a2a" stroke="#1a1a22" stroke-width="0.4"/>
     <path d="M48,22 L50,18 L52,22 Z" fill="#5a5a64"/>
+  </svg>`;
+}
+
+function dragonSpriteSvg() {
+  return `<svg viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <radialGradient id="dragonEye" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#fff080"/>
+        <stop offset="55%" stop-color="#ffa020"/>
+        <stop offset="100%" stop-color="#3a1000"/>
+      </radialGradient>
+    </defs>
+    <path d="M30,55 Q4,42 6,82 Q22,76 32,82 Z" fill="#2a2520" stroke="#0a0500" stroke-width="0.7"/>
+    <path d="M70,55 Q96,42 94,82 Q78,76 68,82 Z" fill="#2a2520" stroke="#0a0500" stroke-width="0.7"/>
+    <path d="M14,52 Q12,68 12,80 M22,52 Q22,70 24,80" fill="none" stroke="#0a0500" stroke-width="0.5"/>
+    <path d="M86,52 Q88,68 88,80 M78,52 Q78,70 76,80" fill="none" stroke="#0a0500" stroke-width="0.5"/>
+    <path d="M62,108 Q88,118 92,134 L82,134 Q80,122 60,116 Z" fill="#2a2520" stroke="#0a0500" stroke-width="0.7"/>
+    <path d="M88,128 L94,132 L86,134 Z" fill="#1a1010" stroke="#0a0500" stroke-width="0.5"/>
+    <path d="M38,98 Q34,118 36,134 L46,134 L46,100 Z" fill="#2a2520" stroke="#0a0500" stroke-width="0.7"/>
+    <path d="M62,98 Q66,118 64,134 L54,134 L54,100 Z" fill="#2a2520" stroke="#0a0500" stroke-width="0.7"/>
+    <path d="M36,134 L34,138 L37,135 M40,134 L38,138 L41,135 M44,134 L42,138 L45,135" fill="none" stroke="#bfc6cf" stroke-width="0.7"/>
+    <path d="M56,134 L54,138 L57,135 M60,134 L58,138 L61,135 M64,134 L62,138 L65,135" fill="none" stroke="#bfc6cf" stroke-width="0.7"/>
+    <path d="M32,55 Q26,90 36,108 L64,108 Q74,90 68,55 Q60,52 50,52 Q40,52 32,55 Z" fill="#2a2520" stroke="#0a0500" stroke-width="0.8"/>
+    <path d="M40,62 Q42,88 44,104 L56,104 Q58,88 60,62 Q55,68 50,68 Q45,68 40,62 Z" fill="#5a3a22" opacity="0.75"/>
+    <path d="M44,72 Q50,76 56,72 M44,82 Q50,86 56,82 M44,92 Q50,96 56,92" fill="none" stroke="#3a1a10" stroke-width="0.5" opacity="0.6"/>
+    <path d="M50,55 L48,58 L52,58 Z M50,64 L48,67 L52,67 Z M50,73 L48,76 L52,76 Z M50,84 L48,87 L52,87 Z M50,95 L48,98 L52,98 Z" fill="#0a0500"/>
+    <path d="M44,40 L42,55 L58,55 L56,40 Z" fill="#2a2520" stroke="#0a0500" stroke-width="0.7"/>
+    <ellipse cx="50" cy="32" rx="16" ry="13" fill="#2a2520" stroke="#0a0500" stroke-width="0.8"/>
+    <path d="M34,32 Q30,40 36,44 L52,44 Q56,38 50,30 Z" fill="#2a2520" stroke="#0a0500" stroke-width="0.8"/>
+    <ellipse cx="36" cy="38" rx="0.9" ry="1.1" fill="#0a0500"/>
+    <path d="M34,42 L52,42" stroke="#0a0500" stroke-width="0.7"/>
+    <path d="M37,42 L37,44 M41,42 L41,44.5 M45,42 L45,44 M49,42 L49,44.5" stroke="#fff8e0" stroke-width="0.5"/>
+    <ellipse cx="46" cy="28" rx="3.4" ry="2.8" fill="#0a0500"/>
+    <ellipse cx="58" cy="28" rx="3.4" ry="2.8" fill="#0a0500"/>
+    <circle cx="46" cy="28" r="1.7" fill="url(#dragonEye)"/>
+    <circle cx="58" cy="28" r="1.7" fill="url(#dragonEye)"/>
+    <path d="M44,26 Q47,22 50,25 M56,25 Q53,22 50,25" stroke="#0a0500" stroke-width="1" fill="none"/>
+    <path d="M40,22 Q34,12 28,6 Q34,12 44,22 Z" fill="#1a1010" stroke="#0a0500" stroke-width="0.5"/>
+    <path d="M60,22 Q66,12 72,6 Q66,12 56,22 Z" fill="#1a1010" stroke="#0a0500" stroke-width="0.5"/>
+    <path d="M64,30 Q70,28 74,32" stroke="#1a1010" stroke-width="0.6" fill="none"/>
+    <path d="M36,30 Q30,28 26,32" stroke="#1a1010" stroke-width="0.6" fill="none"/>
+    <path d="M64,72 Q78,80 82,98" fill="none" stroke="#2a2520" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="82" cy="98" r="3.6" fill="#2a2520" stroke="#0a0500" stroke-width="0.5"/>
+    <path d="M78,100 L76,104 M82,102 L82,107 M86,100 L88,104" stroke="#bfc6cf" stroke-width="0.9" stroke-linecap="round"/>
+    <path d="M36,72 Q22,80 18,98" fill="none" stroke="#2a2520" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="18" cy="98" r="3.6" fill="#2a2520" stroke="#0a0500" stroke-width="0.5"/>
+    <path d="M14,100 L12,104 M18,102 L18,107 M22,100 L24,104" stroke="#bfc6cf" stroke-width="0.9" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function redDragonSpriteSvg() {
+  return `<svg viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <radialGradient id="redDragonEye" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#fff4a0"/>
+        <stop offset="55%" stop-color="#ffb030"/>
+        <stop offset="100%" stop-color="#3a0500"/>
+      </radialGradient>
+      <radialGradient id="redDragonBreath" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#ffd060" stop-opacity="0.9"/>
+        <stop offset="60%" stop-color="#e84020" stop-opacity="0.45"/>
+        <stop offset="100%" stop-color="#3a0500" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <path d="M30,55 Q4,42 6,82 Q22,76 32,82 Z" fill="#7a1a10" stroke="#2a0500" stroke-width="0.7"/>
+    <path d="M70,55 Q96,42 94,82 Q78,76 68,82 Z" fill="#7a1a10" stroke="#2a0500" stroke-width="0.7"/>
+    <path d="M14,52 Q12,68 12,80 M22,52 Q22,70 24,80" fill="none" stroke="#2a0500" stroke-width="0.5"/>
+    <path d="M86,52 Q88,68 88,80 M78,52 Q78,70 76,80" fill="none" stroke="#2a0500" stroke-width="0.5"/>
+    <path d="M62,108 Q88,118 92,134 L82,134 Q80,122 60,116 Z" fill="#7a1a10" stroke="#2a0500" stroke-width="0.7"/>
+    <path d="M88,128 L94,132 L86,134 Z" fill="#c84a20" stroke="#2a0500" stroke-width="0.5"/>
+    <path d="M38,98 Q34,118 36,134 L46,134 L46,100 Z" fill="#7a1a10" stroke="#2a0500" stroke-width="0.7"/>
+    <path d="M62,98 Q66,118 64,134 L54,134 L54,100 Z" fill="#7a1a10" stroke="#2a0500" stroke-width="0.7"/>
+    <path d="M36,134 L34,138 L37,135 M40,134 L38,138 L41,135 M44,134 L42,138 L45,135" fill="none" stroke="#fff8e0" stroke-width="0.7"/>
+    <path d="M56,134 L54,138 L57,135 M60,134 L58,138 L61,135 M64,134 L62,138 L65,135" fill="none" stroke="#fff8e0" stroke-width="0.7"/>
+    <path d="M32,55 Q26,90 36,108 L64,108 Q74,90 68,55 Q60,52 50,52 Q40,52 32,55 Z" fill="#7a1a10" stroke="#2a0500" stroke-width="0.8"/>
+    <path d="M40,62 Q42,88 44,104 L56,104 Q58,88 60,62 Q55,68 50,68 Q45,68 40,62 Z" fill="#c87a3a" opacity="0.85"/>
+    <path d="M44,72 Q50,76 56,72 M44,82 Q50,86 56,82 M44,92 Q50,96 56,92" fill="none" stroke="#5a1a05" stroke-width="0.5" opacity="0.7"/>
+    <path d="M50,55 L48,58 L52,58 Z M50,64 L48,67 L52,67 Z M50,73 L48,76 L52,76 Z M50,84 L48,87 L52,87 Z M50,95 L48,98 L52,98 Z" fill="#c84a20"/>
+    <path d="M44,40 L42,55 L58,55 L56,40 Z" fill="#7a1a10" stroke="#2a0500" stroke-width="0.7"/>
+    <ellipse cx="50" cy="32" rx="16" ry="13" fill="#7a1a10" stroke="#2a0500" stroke-width="0.8"/>
+    <path d="M34,32 Q30,40 36,44 L52,44 Q56,38 50,30 Z" fill="#7a1a10" stroke="#2a0500" stroke-width="0.8"/>
+    <ellipse cx="36" cy="38" rx="0.9" ry="1.1" fill="#2a0500"/>
+    <ellipse cx="34" cy="40" rx="3" ry="1.6" fill="url(#redDragonBreath)"/>
+    <path d="M34,42 L52,42" stroke="#2a0500" stroke-width="0.7"/>
+    <path d="M37,42 L37,44 M41,42 L41,44.5 M45,42 L45,44 M49,42 L49,44.5" stroke="#fff8e0" stroke-width="0.5"/>
+    <ellipse cx="46" cy="28" rx="3.4" ry="2.8" fill="#2a0500"/>
+    <ellipse cx="58" cy="28" rx="3.4" ry="2.8" fill="#2a0500"/>
+    <circle cx="46" cy="28" r="1.7" fill="url(#redDragonEye)"/>
+    <circle cx="58" cy="28" r="1.7" fill="url(#redDragonEye)"/>
+    <path d="M44,26 Q47,22 50,25 M56,25 Q53,22 50,25" stroke="#2a0500" stroke-width="1" fill="none"/>
+    <path d="M40,22 Q34,12 28,6 Q34,12 44,22 Z" fill="#3a0a00" stroke="#1a0500" stroke-width="0.5"/>
+    <path d="M60,22 Q66,12 72,6 Q66,12 56,22 Z" fill="#3a0a00" stroke="#1a0500" stroke-width="0.5"/>
+    <path d="M64,30 Q70,28 74,32" stroke="#3a0a00" stroke-width="0.6" fill="none"/>
+    <path d="M36,30 Q30,28 26,32" stroke="#3a0a00" stroke-width="0.6" fill="none"/>
+    <path d="M64,72 Q78,80 82,98" fill="none" stroke="#7a1a10" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="82" cy="98" r="3.6" fill="#7a1a10" stroke="#2a0500" stroke-width="0.5"/>
+    <path d="M78,100 L76,104 M82,102 L82,107 M86,100 L88,104" stroke="#fff8e0" stroke-width="0.9" stroke-linecap="round"/>
+    <path d="M36,72 Q22,80 18,98" fill="none" stroke="#7a1a10" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="18" cy="98" r="3.6" fill="#7a1a10" stroke="#2a0500" stroke-width="0.5"/>
+    <path d="M14,100 L12,104 M18,102 L18,107 M22,100 L24,104" stroke="#fff8e0" stroke-width="0.9" stroke-linecap="round"/>
   </svg>`;
 }
 

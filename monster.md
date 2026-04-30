@@ -15,6 +15,7 @@ Monsters are declared in `MONSTER_DEFS` (in `server/game.js`). Each entry has:
 | `hp`    | number | Starting HP at spawn.                                                   |
 | `maxHp` | number | Maximum HP (used for the HP bar denominator).                           |
 | `atk`   | number | Damage rolled on counter-attack (`floor(random*atk) + 1`).              |
+| `hpRegen` | number | Self-regenerated HP per second while `hp < maxHp`. `0` (or omitted) disables regen. |
 
 A spawned monster carries a copy of these fields plus a unique `id` and `defId` (the key it was spawned from).
 
@@ -50,6 +51,17 @@ When the monster respawns, players currently in the room receive a single `text`
 4. **Author an SVG sprite** for the monster following the [Sprite (SVG)](#sprite-svg) section below, and register it in `MONSTER_SPRITES` (in `public/client.js`). Without this step the monster falls back to its `icon` glyph in combat — acceptable temporarily, but every monster shipped to players should have a sprite.
 
 The server protocol carries `defId` in the `combat` payload; the client picks the sprite by `defId` lookup. No new message types are needed.
+
+## Self-regeneration
+
+Monsters with a non-zero `hpRegen` recover HP over time. The server runs a single 1 Hz tick (interval = `MONSTER_REGEN_TICK_MS` in `server/config.js`) that walks every live spawned monster and, if its HP is below `maxHp`, adds `hpRegen` HP (clamped to `maxHp`). Regen runs even during combat — there is no combat-pause window.
+
+Two delivery paths keep all viewers in sync:
+
+- **Engaged players** receive an updated `combat` message for the monster they're fighting, so the foe HP bar in `#combat-view` ticks back up in real time. The push is targeted to players whose `combatTargetId === \`m${id}\`` and who are still in the room.
+- **All players in the same room** (engaged or idle) receive a `room_monsters` message — a snapshot of every live monster in the room with current `hp`/`maxHp`. The client renders this into the `#room-monsters` panel above the log, which is the "대기화면" view of room threats. The same message is pushed by `describeRoom` (room entry), `_attackMonster` (after damage and after a kill), and `scheduleRespawn` (after respawn) so the panel stays consistent across every state change, not just regen ticks.
+
+To keep broadcast volume bounded at the 1k-concurrent target, the regen tick only broadcasts to rooms where at least one monster actually changed HP this tick. A room with all monsters at full HP (or with `hpRegen: 0` everywhere) is silent. The interval is `.unref()`'d so it doesn't keep the process alive in tests.
 
 ## Concurrency (shared HP across attackers)
 
