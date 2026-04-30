@@ -370,29 +370,30 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
   width: 64px;
   height: 24px;
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid #4a505c;
   border-radius: 3px;
   font-size: 11px;
+  font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--fg-dim);
+  color: #c4bfb0;
   transition: border-color 0.2s, color 0.2s;
   user-select: none;
 }
 .map-room.current {
-  border-color: var(--accent-soft);
+  border-color: var(--accent);
   color: var(--accent);
   background: var(--bg-elev);
 }
 .map-room.forest {
   background: #0c150c;
-  border-color: #243324;
-  color: #4a6e4a;
+  border-color: #4d6e4d;
+  color: #8fb88f;
 }
 .map-room.forest.current {
-  border-color: #3a6a3a;
-  color: #7ab87a;
+  border-color: #6fc06f;
+  color: #b5e8b5;
   background: #132013;
 }
 /* Exit stubs: short marks indicating an exit in a given direction. They sit
@@ -400,12 +401,12 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
    viewport edge, the inside half still shows where a path leaves the cell. */
 .map-room .stub {
   position: absolute;
-  background: var(--border);
+  background: #4a505c;
   pointer-events: none;
 }
-.map-room.current .stub { background: var(--accent-soft); }
-.map-room.forest .stub { background: #243324; }
-.map-room.forest.current .stub { background: #3a6a3a; }
+.map-room.current .stub { background: var(--accent); }
+.map-room.forest .stub { background: #4d6e4d; }
+.map-room.forest.current .stub { background: #6fc06f; }
 .map-room .stub-n { top: -4px; left: calc(50% - 1px); width: 2px; height: 8px; }
 .map-room .stub-s { bottom: -4px; left: calc(50% - 1px); width: 2px; height: 8px; }
 .map-room .stub-e { right: -4px; top: calc(50% - 1px); width: 8px; height: 2px; }
@@ -482,4 +483,91 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
     background: rgba(0, 0, 0, 0.45);
     z-index: 9;
   }
+}
+
+/* ── Welcome / character registration ────────────────────────── */
+#welcome-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(8, 12, 18, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+#welcome-card {
+  width: min(440px, 92vw);
+  background: #1a1f28;
+  border: 1px solid #3a4250;
+  border-radius: 8px;
+  padding: 22px 24px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  color: #e0d8c8;
+  font-family: inherit;
+}
+#welcome-card h2 {
+  margin: 0 0 8px 0;
+  font-size: 1.15rem;
+  letter-spacing: 0.05em;
+  color: #e3a13a;
+}
+.welcome-hint {
+  margin: 0 0 16px 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #a89770;
+}
+#welcome-form label {
+  display: block;
+  margin-bottom: 12px;
+}
+#welcome-form label span {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 0.8rem;
+  color: #a89770;
+  letter-spacing: 0.04em;
+}
+#welcome-form input,
+#welcome-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  background: #0e1218;
+  border: 1px solid #3a4250;
+  border-radius: 4px;
+  color: #e0d8c8;
+  font-family: inherit;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+#welcome-form input:focus,
+#welcome-form textarea:focus {
+  outline: none;
+  border-color: #e3a13a;
+}
+#welcome-form button {
+  width: 100%;
+  padding: 10px;
+  margin-top: 4px;
+  background: #e3a13a;
+  border: none;
+  border-radius: 4px;
+  color: #0e1218;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: bold;
+  cursor: pointer;
+}
+#welcome-form button:hover { background: #f0b14a; }
+#welcome-form button:disabled { background: #5a4a30; cursor: wait; color: #2a2520; }
+.welcome-error {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: rgba(180, 60, 60, 0.18);
+  border: 1px solid rgba(180, 60, 60, 0.4);
+  border-radius: 4px;
+  color: #e8a0a0;
+  font-size: 0.85rem;
 }

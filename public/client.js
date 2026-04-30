@@ -9,6 +9,18 @@ const statusName = document.getElementById('status-name');
 const connStatus = document.getElementById('conn-status');
 const modeGlyph = document.getElementById('mode-glyph');
 const modeBadge = document.getElementById('mode-badge');
+const welcomeOverlay = document.getElementById('welcome-overlay');
+const welcomeForm = document.getElementById('welcome-form');
+const welcomeName = document.getElementById('welcome-name');
+const welcomeDesc = document.getElementById('welcome-desc');
+const welcomeError = document.getElementById('welcome-error');
+const welcomeButton = welcomeForm?.querySelector('button[type=submit]');
+
+// Cache of per-player AI-generated sprite SVGs, keyed by player id. Server
+// pushes via `character_sprite` messages on registration completion and on
+// room entry. Combat panel looks up by id; absent → falls back to default.
+const PLAYER_SPRITES = new Map();
+let myPlayerId = null;
 
 const EQUIP_SLOTS = [
   ['head', '머리'],
@@ -21,9 +33,29 @@ const EQUIP_SLOTS = [
 let ws;
 let backoff = 500;
 
+// Persistent session id. Lets a refresh / brief disconnect resume the same
+// in-world player object (HP, kill-steal block, room) within the server's
+// reconnect grace. In production we use localStorage so all tabs share one
+// identity (newer-wins force-takeover keeps single-character semantics). In
+// dev (window.ARAGRIA_DEV) we use sessionStorage so each tab gets its own sid
+// — needed to drive multiple players from one machine for testing.
+function getSid() {
+  const KEY = 'aragria.sid';
+  const store = window.ARAGRIA_DEV ? sessionStorage : localStorage;
+  let sid = '';
+  try { sid = store.getItem(KEY) || ''; } catch {}
+  if (!sid) {
+    const buf = new Uint8Array(16);
+    crypto.getRandomValues(buf);
+    sid = Array.from(buf, b => b.toString(16).padStart(2, '0')).join('');
+    try { store.setItem(KEY, sid); } catch {}
+  }
+  return sid;
+}
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws = new WebSocket(`${proto}://${location.host}/ws?sid=${encodeURIComponent(getSid())}`);
 
   ws.addEventListener('open', () => {
     connStatus.textContent = '연결됨';
@@ -37,9 +69,36 @@ function connect() {
     handleMessage(msg);
   });
 
-  ws.addEventListener('close', () => {
-    connStatus.textContent = '연결 끊김 — 재연결 중...';
+  ws.addEventListener('close', (ev) => {
+    const code = ev.code;
+    const reason = ev.reason || '';
     connStatus.className = 'off';
+
+    if (code === 4001) {
+      // Server force-closed because a newer connection took over this sid
+      // (typically: another tab opened with this account). Auto-reconnecting
+      // would create a fight between tabs — show terminal message instead.
+      connStatus.textContent = '다른 탭에서 접속됨 — 이 탭은 종료됨';
+      return;
+    }
+    if (code === 4003) {
+      // Per-IP connection rate limit on server. Window is 10s; using a longer
+      // base delay here so we don't burn through the budget by retrying.
+      connStatus.textContent = '접속 빈도 제한 — 약 10초 후 자동 재시도';
+      setTimeout(connect, 10_000);
+      backoff = 500;
+      return;
+    }
+    if (code === 4002) {
+      // Legacy reject path (kept for forward compat). Treat as transient.
+      connStatus.textContent = '세션 충돌 — 재연결 중';
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, 8000);
+      return;
+    }
+    // Generic disconnect (network blip, server restart, etc.).
+    const why = reason ? ` (${reason})` : code ? ` (코드 ${code})` : '';
+    connStatus.textContent = `연결 끊김 — 재연결 중...${why}`;
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, 8000);
   });
@@ -49,12 +108,52 @@ function connect() {
 
 function handleMessage(msg) {
   switch (msg.type) {
-    case 'text':   appendLine(msg.segments ?? msg.text, 'line'); break;
-    case 'system': appendLine(msg.text, 'line system'); break;
-    case 'status': renderStatus(msg.status); break;
-    case 'view':   renderObjectView(msg.view); break;
-    case 'combat': renderCombat(msg.combat); break;
+    case 'text':    appendLine(msg.segments ?? msg.text, 'line'); break;
+    case 'system':  appendLine(msg.text, 'line system'); break;
+    case 'status':  renderStatus(msg.status); hideWelcome(); break;
+    case 'view':    renderObjectView(msg.view); break;
+    case 'combat':  renderCombat(msg.combat); break;
+    case 'welcome': showWelcome(); break;
+    case 'character_sprite':
+      if (msg.svg && typeof msg.playerId === 'number') {
+        PLAYER_SPRITES.set(msg.playerId, msg.svg);
+      }
+      break;
   }
+}
+
+function showWelcome() {
+  if (!welcomeOverlay) return;
+  welcomeOverlay.hidden = false;
+  if (welcomeButton) welcomeButton.disabled = false;
+  if (welcomeError) welcomeError.hidden = true;
+  // Defer focus until after the show transition; iOS Safari ignores focus()
+  // on a just-unhidden element otherwise.
+  setTimeout(() => welcomeName?.focus(), 50);
+}
+function hideWelcome() {
+  if (!welcomeOverlay) return;
+  welcomeOverlay.hidden = true;
+}
+
+if (welcomeForm) {
+  welcomeForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const name = (welcomeName.value || '').trim();
+    const description = (welcomeDesc.value || '').trim();
+    if (name.length < 1 || description.length < 5) {
+      if (welcomeError) {
+        welcomeError.textContent = '이름은 1자 이상, 특징은 5자 이상이어야 합니다.';
+        welcomeError.hidden = false;
+      }
+      return;
+    }
+    if (welcomeButton) welcomeButton.disabled = true;
+    if (welcomeError) welcomeError.hidden = true;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'register', name, description }));
+    }
+  });
 }
 
 // #log shares vertical space with sibling panels (#combat-view, #object-view)
@@ -132,9 +231,15 @@ function makeCombatActor(actor, isFoe, isFallen, isHurt, killerName = null, kind
   const sprite = document.createElement('div');
   sprite.className = 'cv-sprite';
   const monsterSvg = isFoe && !isFallen && kind === 'monster' && MONSTER_SPRITES[actor.defId];
+  // Per-character custom sprite delivered by the server (AI-generated from
+  // the player's description at registration). Indexed by player id; falls
+  // back to the default playerSpriteSvg() when unavailable (no API key,
+  // generation failed, or sprite not yet delivered).
+  const customPlayerSvg = !isFallen && kind === 'player' && typeof actor.id === 'number'
+    ? PLAYER_SPRITES.get(actor.id) : null;
   if (!isFallen && kind === 'player') {
     sprite.classList.add('cv-sprite-svg');
-    sprite.innerHTML = playerSpriteSvg();
+    sprite.innerHTML = customPlayerSvg || playerSpriteSvg();
   } else if (monsterSvg) {
     sprite.classList.add('cv-sprite-svg');
     sprite.innerHTML = monsterSvg();
@@ -559,10 +664,21 @@ document.addEventListener('keydown', (e) => {
     setMode(mode === 'typing' ? 'move' : 'typing');
     return;
   }
-  if (e.key === 'Enter' && mode === 'move') {
-    e.preventDefault();
-    setMode('typing');
-    return;
+  if (e.key === 'Enter') {
+    // Move mode: Enter exits to typing. Typing mode: if focus drifted to the
+    // map / sidebar / body, pull it back to the prompt so the user can resume
+    // typing without an extra click. When the prompt is already focused, fall
+    // through and let the form's submit handler run normally.
+    if (mode === 'move') {
+      e.preventDefault();
+      setMode('typing');
+      return;
+    }
+    if (document.activeElement !== promptInput) {
+      e.preventDefault();
+      promptInput.focus();
+      return;
+    }
   }
   if (mode !== 'move') return;
   // Ignore modifier combos so browser shortcuts still work.
@@ -677,7 +793,7 @@ function buildMap() {
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
     line.setAttribute('x1', x1); line.setAttribute('y1', y1);
     line.setAttribute('x2', x2); line.setAttribute('y2', y2);
-    line.setAttribute('stroke', 'var(--border)');
+    line.setAttribute('stroke', '#4a505c');
     line.setAttribute('stroke-width', '1.5');
     svg.appendChild(line);
   }

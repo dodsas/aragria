@@ -42,6 +42,25 @@
       </form>
     </section>
   </main>
+  <div id="welcome-overlay" hidden>
+    <div id="welcome-card">
+      <h2>모험가 등록</h2>
+      <p class="welcome-hint">아라그리아에 처음 들어선 당신의 정보를 알려주세요. 입력한 특징을 바탕으로 전투 시 캐릭터 모습이 그려집니다.</p>
+      <form id="welcome-form" autocomplete="off">
+        <label>
+          <span>이름</span>
+          <input id="welcome-name" type="text" maxlength="16" required placeholder="예: 카이런" />
+        </label>
+        <label>
+          <span>특징</span>
+          <textarea id="welcome-desc" rows="4" maxlength="200" required placeholder="예: 어깨에 까마귀를 얹은 은발 마법사, 검은 망토와 푸른 룬 지팡이"></textarea>
+        </label>
+        <div id="welcome-error" class="welcome-error" hidden></div>
+        <button type="submit">입장</button>
+      </form>
+    </div>
+  </div>
+  <script src="/env.js"></script>
   <script src="/client.js"></script>
 </body>
 </html>

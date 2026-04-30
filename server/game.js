@@ -1,10 +1,21 @@
 // Authoritative game state. Single in-memory world.
 // All commands flow through Game.handleCommand(player, input).
 
-import { MONSTER_RESPAWN_MS, DEFAULT_MONSTER_TIER, ATTACK_COOLDOWN_MS, MOVE_COOLDOWN_MS, KILLSTEAL_MOVE_BLOCK_MS } from './config.js';
+import {
+  MONSTER_RESPAWN_MS, DEFAULT_MONSTER_TIER,
+  ATTACK_COOLDOWN_MS, MOVE_COOLDOWN_MS, KILLSTEAL_MOVE_BLOCK_MS,
+  INPUT_MAX_LEN, SAY_MAX_LEN, SAY_COOLDOWN_MS,
+  CMD_RATE_PER_SEC, CMD_BURST, RECONNECT_GRACE_MS,
+  NAME_MAX_LEN, NAME_MIN_LEN, DESC_MAX_LEN, DESC_MIN_LEN,
+} from './config.js';
 import { loadZones } from './zones/index.js';
+import { generateCharacterSprite } from './sprite.js';
 
 let nextPlayerId = 1;
+
+// Canonical exit keys remain English in zone definitions; we localize only at
+// the presentation boundary so room data stays language-neutral.
+const DIR_LABEL = { north: '북', south: '남', east: '동', west: '서' };
 
 // 룸/오브젝트/초기 스폰 콘텐츠는 zone 모듈에 분리되어 있다(server/zones/, zone.md).
 // 부팅 시 한 번 머지하여 글로벌 사전을 만든다. 룩업 모델은 그대로 — ROOMS[id], OBJECTS[key].
@@ -71,6 +82,10 @@ const ITEM_USE = {
 export class Game {
   constructor() {
     this.players = new Map();
+    // sid → player. Lets a reconnect within RECONNECT_GRACE_MS rebind to the
+    // same in-world player object so penalties (kill-steal block, low HP,
+    // active combat target) survive a socket close.
+    this.sidToPlayer = new Map();
     this.roomMonsters = new Map();
     this._spawnMonsters();
   }
@@ -130,13 +145,101 @@ export class Game {
     return { hpBefore, killingBlow };
   }
 
-  addPlayer(socket) {
+  // Public connection entry. Either rebinds an existing in-grace player whose
+  // sid matches (preserving HP, kill-steal block, room, etc.) or allocates a
+  // fresh one. Rejecting duplicate live sessions on the same sid prevents two
+  // tabs from controlling the same character.
+  attachPlayer(socket, sid) {
+    if (sid) {
+      const existing = this.sidToPlayer.get(sid);
+      if (existing) {
+        // Newer-wins: if a live socket is still bound (multi-tab, or refresh
+        // where the old close hasn't propagated yet), force-close it so this
+        // new socket can rebind. The old socket's `close` handler in index.js
+        // is guarded by `player.socket === socket` and silently skips its
+        // detach when that's no longer true — so this rebind is race-safe.
+        if (existing.socket && existing.socket.readyState === 1) {
+          try { existing.socket.close(4001, 'replaced by newer session'); } catch {}
+        }
+        if (existing.graceTimer) {
+          clearTimeout(existing.graceTimer);
+          existing.graceTimer = null;
+        }
+        existing.disconnectedAt = null;
+        existing.socket = socket;
+        if (existing.registered) {
+          this.send(existing, { type: 'system', text: `다시 접속했습니다, ${existing.name}.` });
+          this.pushStatus(existing);
+          this.describeRoom(existing);
+          // Re-deliver own sprite so the freshly-loaded client can render it
+          // in combat without a roundtrip.
+          if (existing.spriteSvg) {
+            this.send(existing, { type: 'character_sprite', playerId: existing.id, svg: existing.spriteSvg });
+          }
+        } else {
+          // Stub player resumed before completing registration — re-prompt.
+          this.send(existing, { type: 'welcome' });
+        }
+        return existing;
+      }
+    }
+    return this._addPlayer(socket, sid);
+  }
+
+  // Defers actual removal by RECONNECT_GRACE_MS so a reconnect with the same
+  // sid can resume in-place. The player object remains in `this.players` and
+  // therefore in their room's broadcast set during grace; PvP / monster
+  // interactions still resolve against them. Their socket is null'd so any
+  // server→client send is dropped silently.
+  detachPlayer(id) {
+    const p = this.players.get(id);
+    if (!p || p.disconnectedAt != null) return;
+
+    // Stubs (not yet registered) have no in-world state worth preserving and
+    // no roomId to broadcast departure from. Drop them immediately so a fresh
+    // sid'd connect doesn't keep the half-formed record around.
+    if (!p.registered) {
+      this.players.delete(id);
+      if (p.sid) this.sidToPlayer.delete(p.sid);
+      return;
+    }
+
+    p.disconnectedAt = Date.now();
+    p.socket = null;
+    // Queued intents reference the room state at the time of issue and would
+    // fire during grace into a missing socket — cancel both.
+    if (p.pendingMove) {
+      clearTimeout(p.pendingMove.timer);
+      p.pendingMove = null;
+    }
+    if (p.pendingAttack) {
+      clearTimeout(p.pendingAttack.timer);
+      p.pendingAttack = null;
+    }
+
+    p.graceTimer = setTimeout(() => {
+      // If still disconnected when timer fires, finalize. Reattach clears
+      // disconnectedAt, so this guard skips reattached players whose timer
+      // wasn't cleared in time (race-safe under the single-threaded model).
+      if (p.disconnectedAt != null) this._finalizePlayer(id);
+    }, RECONNECT_GRACE_MS);
+  }
+
+  _addPlayer(socket, sid = '') {
     const id = nextPlayerId++;
+    const now = Date.now();
+    // Stub player. Sits outside the world (roomId=null) until registerPlayer
+    // promotes it. The only client→server message accepted in this state is
+    // `register`; everything else is rejected with a system notice.
     const player = {
       id,
-      name: `여행자${id}`,
+      sid,
+      name: '',
+      description: '',
+      registered: false,
       socket,
-      roomId: 'square',
+      roomId: null,
+      spriteSvg: null,
       hp: 100,
       maxHp: 100,
       icon: '🧙',
@@ -146,29 +249,136 @@ export class Game {
       downed: false,
       lastAttackAt: 0,
       lastMoveAt: 0,
+      lastSayAt: 0,
       pendingMove: null,
+      pendingAttack: null,
       moveBlockedUntil: 0,
       moveBlockedBy: null,
+      moveBlockedById: null,
+      // Token bucket for global per-player command rate. Refills lazily on
+      // each handleCommand entry — no timers, no cross-player coordination.
+      cmdBucket: CMD_BURST,
+      cmdBucketRefAt: now,
+      // Reconnect/grace state. disconnectedAt is null while live; set when the
+      // socket closes; cleared on reattach. graceTimer fires _finalizePlayer
+      // if the grace window expires without a reconnect.
+      disconnectedAt: null,
+      graceTimer: null,
     };
     this.players.set(id, player);
+    if (sid) this.sidToPlayer.set(sid, player);
 
-    this.send(player, { type: 'system', text: `아라그리아에 오신 것을 환영합니다, ${player.name}.` });
-    this.pushStatus(player);
-    this.describeRoom(player);
-    this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 이곳에 도착했습니다.` }, player.id);
+    this.send(player, { type: 'welcome' });
     return player;
   }
 
-  removePlayer(id) {
+  // Promote a stub player to a fully registered character. After this they
+  // appear in the square and can issue commands. Sprite generation is fired
+  // off in the background — players don't wait for it; combat falls back to
+  // the default sprite until the API call returns.
+  registerPlayer(player, name, description) {
+    if (player.registered) return;
+
+    const cleanName = String(name ?? '').slice(0, NAME_MAX_LEN).trim();
+    const cleanDesc = String(description ?? '').slice(0, DESC_MAX_LEN).trim();
+    if (cleanName.length < NAME_MIN_LEN || cleanDesc.length < DESC_MIN_LEN) {
+      this.send(player, { type: 'system', text: `이름은 ${NAME_MIN_LEN}~${NAME_MAX_LEN}자, 특징은 ${DESC_MIN_LEN}~${DESC_MAX_LEN}자로 입력하세요.` });
+      this.send(player, { type: 'welcome' });
+      return;
+    }
+    // Reject duplicate live names so attack/look targeting (exact-match) stays
+    // unambiguous. Skip the comparing player itself.
+    for (const p of this.players.values()) {
+      if (p.id !== player.id && p.registered && p.name === cleanName) {
+        this.send(player, { type: 'system', text: '같은 이름의 모험가가 이미 있습니다.' });
+        this.send(player, { type: 'welcome' });
+        return;
+      }
+    }
+
+    player.name = cleanName;
+    player.description = cleanDesc;
+    player.registered = true;
+    player.roomId = 'square';
+
+    this.send(player, { type: 'system', text: `${cleanName}, 아라그리아에 오신 것을 환영합니다.` });
+    this.pushStatus(player);
+    this.describeRoom(player);
+    this.broadcastRoom(player.roomId, { type: 'text', text: `${cleanName}님이 이곳에 도착했습니다.` }, player.id);
+    this._sendRoomSprites(player);
+
+    this._generateSpriteFor(player);
+  }
+
+  // Background-generates the per-character SVG via the sprite module. On
+  // success, caches on the player and pushes to everyone currently in the
+  // same room (so combat panels can render it). Pure side-effect — never
+  // throws, never blocks the caller.
+  async _generateSpriteFor(player) {
+    const svg = await generateCharacterSprite(player.name, player.description);
+    if (!svg) return;
+    // Player may have disconnected/finalized while we awaited; guard.
+    if (!this.players.has(player.id)) return;
+    player.spriteSvg = svg;
+    const msg = { type: 'character_sprite', playerId: player.id, svg };
+    for (const p of this.players.values()) {
+      if (!p.registered) continue;
+      if (p.roomId !== player.roomId) continue;
+      this.send(p, msg);
+    }
+  }
+
+  // Final removal after grace expires (or on respawn-driven cleanup). Same
+  // semantics as the old removePlayer: drop from registry, free kill-steal
+  // blocks anchored to this player's presence, broadcast departure.
+  _finalizePlayer(id) {
     const p = this.players.get(id);
     if (!p) return;
-    if (p.pendingMove) clearTimeout(p.pendingMove.timer);
+    const fromRoom = p.roomId;
     this.players.delete(id);
-    this.broadcastRoom(p.roomId, { type: 'text', text: `${p.name}님이 떠났습니다.` });
+    if (p.sid) this.sidToPlayer.delete(p.sid);
+    this._clearKillStealBlocksAgainst(id, fromRoom);
+    this.broadcastRoom(fromRoom, { type: 'text', text: `${p.name}님이 떠났습니다.` });
+  }
+
+  // Kill-steal block (see _attackMonster) is anchored to the victim's presence
+  // in the disputed room. Once the victim leaves that room — by moving,
+  // dying/respawning, or disconnecting — the anti-grief gate has nothing to
+  // enforce and we lift it on every player still holding a block against them.
+  _clearKillStealBlocksAgainst(blockerId, fromRoomId) {
+    const now = Date.now();
+    for (const p of this.players.values()) {
+      if (p.moveBlockedById !== blockerId) continue;
+      if (p.roomId !== fromRoomId) continue;
+      if (p.moveBlockedUntil <= now) continue;
+      p.moveBlockedUntil = 0;
+      p.moveBlockedBy = null;
+      p.moveBlockedById = null;
+      this.send(p, { type: 'system', text: '방해자가 자리를 떠났다. 이제 이동할 수 있다.' });
+    }
   }
 
   handleCommand(player, raw) {
-    const input = String(raw || '').trim();
+    // Stub players (pre-registration) can't issue any text commands —
+    // everything routes through the welcome modal until they register.
+    if (!player.registered) {
+      this.send(player, { type: 'welcome' });
+      return;
+    }
+    // Global per-player rate limit. Token bucket refilled lazily; drops
+    // commands silently when empty. Silent-drop avoids amplifying a flood
+    // with rate-limit notices, which would themselves be expensive to send.
+    const now = Date.now();
+    const dt = (now - player.cmdBucketRefAt) / 1000;
+    player.cmdBucket = Math.min(CMD_BURST, player.cmdBucket + dt * CMD_RATE_PER_SEC);
+    player.cmdBucketRefAt = now;
+    if (player.cmdBucket < 1) return;
+    player.cmdBucket -= 1;
+
+    // Cap input before any tokenization. WS_MAX_PAYLOAD is the wire-level
+    // ceiling; this is the per-command ceiling (a 4 KiB frame can still carry
+    // a 4 KiB `look` arg otherwise).
+    const input = String(raw || '').slice(0, INPUT_MAX_LEN).trim();
     if (!input) return;
     const [cmd, ...rest] = input.split(/\s+/);
     const arg = rest.join(' ').trim();
@@ -196,16 +406,19 @@ export class Game {
         if (['north','south','east','west','n','s','e','w','북','남','동','서','북쪽','남쪽','동쪽','서쪽'].includes(cmd)) {
           return this.move(player, cmd);
         }
-        this.send(player, { type: 'system', text: `알 수 없는 명령: ${cmd}` });
+        // Anything we don't recognize is treated as chat — typing prose into
+        // the prompt naturally broadcasts to the room without needing the
+        // `말` keyword. `say`'s own cooldown / length cap still apply.
+        return this.say(player, input);
     }
   }
 
   describeRoom(player) {
     const room = ROOMS[player.roomId];
-    const exits = Object.keys(room.exits).join(', ') || '(없음)';
+    const exits = Object.keys(room.exits).map(d => DIR_LABEL[d] || d).join(', ') || '(없음)';
     const objs = room.objects.map(o => OBJECTS[o]?.name).filter(Boolean).join(', ') || '(없음)';
     const others = [...this.players.values()]
-      .filter(p => p.roomId === room.id && p.id !== player.id)
+      .filter(p => p.registered && p.roomId === room.id && p.id !== player.id && p.disconnectedAt == null)
       .map(p => p.name).join(', ');
     this.send(player, { type: 'text', text: `── ${room.name} ──` });
     this.send(player, { type: 'text', text: room.desc });
@@ -235,7 +448,10 @@ export class Game {
     const room = ROOMS[player.roomId];
     const objKey = room.objects.find(o => {
       const obj = OBJECTS[o];
-      return obj && (o === target || obj.name === target || obj.name.includes(target));
+      return obj && (
+        o === target || obj.name === target ||
+        (target.length >= 2 && obj.name.includes(target))
+      );
     });
     if (objKey) {
       const obj = OBJECTS[objKey];
@@ -249,7 +465,10 @@ export class Game {
     }
 
     const monsters = this.roomMonsters.get(player.roomId) || [];
-    const monster = monsters.find(m => m.name.includes(target) || m.defId === target);
+    const monster = monsters.find(m =>
+      m.name === target || m.defId === target ||
+      (target.length >= 2 && m.name.includes(target))
+    );
     if (monster) {
       const def = MONSTER_DEFS[monster.defId];
       this.send(player, { type: 'text', text: def.desc });
@@ -261,9 +480,11 @@ export class Game {
       return;
     }
 
+    // Disconnected players (in grace) remain findable so they can still be
+    // engaged — disconnect doesn't grant invulnerability.
     const someone = [...this.players.values()].find(p =>
       p.roomId === player.roomId &&
-      (p.name === target || p.name.includes(target) || String(p.id) === target)
+      (p.name === target || String(p.id) === target)
     );
     if (someone) {
       return this._lookPlayer(player, someone, someone.id === player.id);
@@ -277,9 +498,12 @@ export class Game {
       .filter(Boolean)
       .map(it => it.name)
       .join(', ') || '(맨몸)';
+    // The character's own description (entered at registration) is what
+    // other players read on `look` — same role as a monster's hand-written
+    // `desc` on the definition.
     this.send(viewer, {
       type: 'text',
-      text: isSelf ? '거울에 비친 자신을 본다.' : '또 다른 여행자다. 눈빛에 알 수 없는 의도가 비친다.',
+      text: target.description || (isSelf ? '거울에 비친 자신을 본다.' : '또 다른 여행자다.'),
     });
     this.seg(viewer, [
       { text: target.name, cls: 'tx-player' },
@@ -301,10 +525,20 @@ export class Game {
     // REJECTED, not queued, so the player can't stack a move that auto-fires
     // the moment the block lifts.
     if (player.moveBlockedUntil > now) {
-      const remainSec = Math.ceil((player.moveBlockedUntil - now) / 1000);
-      const blocker = player.moveBlockedBy || '누군가';
-      this.send(player, { type: 'system', text: `${blocker}님이 당신의 이동을 방해중입니다. (${remainSec}초 후 이동가능)` });
-      return;
+      // Lazy fallback: if the blocker has since left this room (or disconnected
+      // without the push-clear path firing for any reason), the gate has
+      // nothing to enforce — drop it and let the move proceed.
+      const blockerPlayer = player.moveBlockedById ? this.players.get(player.moveBlockedById) : null;
+      if (!blockerPlayer || blockerPlayer.roomId !== player.roomId) {
+        player.moveBlockedUntil = 0;
+        player.moveBlockedBy = null;
+        player.moveBlockedById = null;
+      } else {
+        const remainSec = Math.ceil((player.moveBlockedUntil - now) / 1000);
+        const blocker = player.moveBlockedBy || '누군가';
+        this.send(player, { type: 'system', text: `${blocker}님이 당신의 이동을 방해중입니다. (${remainSec}초 후 이동가능)` });
+        return;
+      }
     }
     const elapsed = now - player.lastMoveAt;
     if (elapsed < MOVE_COOLDOWN_MS) {
@@ -338,13 +572,52 @@ export class Game {
       return;
     }
     player.lastMoveAt = Date.now();
-    this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 ${d} 방향으로 떠났습니다.` }, player.id);
+    // Anyone holding a kill-steal block against this player loses the gate the
+    // moment we leave the disputed room. Push-clear before we change roomId so
+    // the helper can match on the (still-current) from-room.
+    this._clearKillStealBlocksAgainst(player.id, player.roomId);
+    this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 ${DIR_LABEL[d] || d}쪽으로 떠났습니다.` }, player.id);
     player.roomId = next;
     this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 도착했습니다.` }, player.id);
     this.clearCombat(player);
     player.combatTargetId = null;
+    // Queued attack was bound to the previous room's targets; firing it after
+    // a room change would resolve against unrelated monsters/players. Cancel.
+    if (player.pendingAttack) {
+      clearTimeout(player.pendingAttack.timer);
+      player.pendingAttack = null;
+    }
     this.pushStatus(player);
     this.describeRoom(player);
+    this._sendRoomSprites(player);
+  }
+
+  // On room entry, push the cached sprite of every other registered player
+  // currently in the room so the arriving client can render them in combat.
+  // Mirror direction (existing → new room): not needed here — when this
+  // player generated their sprite, _generateSpriteFor already broadcast it
+  // to everyone in their then-current room; subsequent room changes
+  // broadcast on entry via this method.
+  _sendRoomSprites(arriver) {
+    if (!arriver.registered) return;
+    // Send arriver's sprite to room mates (so they see this player in combat).
+    if (arriver.spriteSvg) {
+      const myMsg = { type: 'character_sprite', playerId: arriver.id, svg: arriver.spriteSvg };
+      for (const p of this.players.values()) {
+        if (p.id === arriver.id) continue;
+        if (!p.registered) continue;
+        if (p.roomId !== arriver.roomId) continue;
+        this.send(p, myMsg);
+      }
+    }
+    // Send room mates' sprites to the arriver.
+    for (const p of this.players.values()) {
+      if (p.id === arriver.id) continue;
+      if (!p.registered) continue;
+      if (p.roomId !== arriver.roomId) continue;
+      if (!p.spriteSvg) continue;
+      this.send(arriver, { type: 'character_sprite', playerId: p.id, svg: p.spriteSvg });
+    }
   }
 
   useItem(player, arg) {
@@ -352,8 +625,9 @@ export class Game {
       this.send(player, { type: 'system', text: '사용할 아이템을 지정하세요.' });
       return;
     }
-    const idx = player.inventory.findIndex(
-      it => it.id === arg || it.name === arg || it.name.includes(arg)
+    const idx = player.inventory.findIndex(it =>
+      it.id === arg || it.name === arg ||
+      (arg.length >= 2 && it.name.includes(arg))
     );
     if (idx === -1) {
       this.send(player, { type: 'system', text: `'${arg}'을(를) 소지하고 있지 않습니다.` });
@@ -372,32 +646,56 @@ export class Game {
     this.pushStatus(player);
   }
 
-  // Dispatcher: resolve the target by name/id, prefer monsters then players.
-  // Self-targeting is rejected. Argless `attack` falls through to first live
-  // monster (existing behavior); never auto-targets a player.
-  //
-  // Rate limit (ATTACK_COOLDOWN_MS) is enforced here, BEFORE target resolution,
-  // so spam is rejected at the boundary regardless of whether a target exists.
-  // The server is authoritative — see `command.md`.
+  // Server-authoritative cooldown — see command.md. During cooldown the attack
+  // is QUEUED (not rejected): a single timer fires the pending attack when the
+  // cooldown elapses. Latest input wins — issuing another attack replaces the
+  // queued arg so timers can't pile up. Mirrors the move-queue model.
   attack(player, arg) {
     const now = Date.now();
     const elapsed = now - player.lastAttackAt;
     if (elapsed < ATTACK_COOLDOWN_MS) {
+      if (player.pendingAttack) clearTimeout(player.pendingAttack.timer);
       const remain = ATTACK_COOLDOWN_MS - elapsed;
-      this.send(player, { type: 'system', text: `아직 다음 공격 준비가 끝나지 않았다. (${remain}ms)` });
+      const remainSec = (remain / 1000).toFixed(1);
+      this.send(player, { type: 'system', text: `${remainSec}초 후 공격합니다.` });
+      const timer = setTimeout(() => {
+        // Stale-fire guards: disconnect or respawn explicitly clears
+        // pendingAttack so a queued intent can't fire against a stale room.
+        if (!this.players.has(player.id)) return;
+        player.pendingAttack = null;
+        this._doAttack(player, arg);
+      }, remain);
+      player.pendingAttack = { arg, timer };
       return;
     }
-    player.lastAttackAt = now;
+    this._doAttack(player, arg);
+  }
+
+  // Dispatcher: resolve the target by name/id at fire time, prefer monsters
+  // then players. Self-targeting is rejected. Argless `attack` falls through
+  // to first live monster; never auto-targets a player.
+  //
+  // lastAttackAt is consumed here unconditionally — even on miss/no-target —
+  // so a tampered client can't ping the resolver for free.
+  _doAttack(player, arg) {
+    player.lastAttackAt = Date.now();
 
     const monsters = this.roomMonsters.get(player.roomId) || [];
 
     if (arg) {
-      const monster = monsters.find(m => !m.dead && (m.name.includes(arg) || m.defId === arg));
+      // Monster: exact name/defId or substring of length ≥ 2. Single-char
+      // probes can no longer auto-resolve to whatever happens to be in the room.
+      const monster = monsters.find(m => !m.dead && (
+        m.name === arg || m.defId === arg || (arg.length >= 2 && m.name.includes(arg))
+      ));
       if (monster) return this._attackMonster(player, monster);
 
+      // Player: exact name or numeric id only. Substring matching dropped —
+      // it let `attack 자` resolve to any 여행자N at random. Disconnected
+      // players in grace remain valid targets.
       const other = [...this.players.values()].find(p =>
         p.id !== player.id && p.roomId === player.roomId && !p.downed &&
-        (p.name === arg || p.name.includes(arg) || String(p.id) === arg)
+        (p.name === arg || String(p.id) === arg)
       );
       if (other) return this._attackPlayer(player, other);
 
@@ -412,6 +710,10 @@ export class Game {
 
   _attackMonster(player, target) {
     player.combatTargetId = `m${target.id}`;
+    // Close any object-view panel the attacker had open from a prior `look`.
+    // Combat takes over the side panel space; leaving an unrelated view
+    // visible during a fight is noisy.
+    this.send(player, { type: 'view', view: null });
 
     const hasWeapon = !!player.equipment.weapon;
     const dmgOut = Math.floor(Math.random() * 8) + (hasWeapon ? 8 : 3);
@@ -429,6 +731,7 @@ export class Game {
     // engaged with this same monster — they are the victims of the steal.
     const engagementKey = `m${target.id}`;
     let killStealVictimName = null;
+    let killStealVictimId = null;
     for (const p of this.players.values()) {
       if (p.id === player.id) continue;
       if (p.roomId !== player.roomId) continue;
@@ -448,7 +751,10 @@ export class Game {
         ]);
         // First engaged onlooker becomes the named blocker. Multiple victims
         // could exist; one name is enough for the message.
-        if (!killStealVictimName) killStealVictimName = p.name;
+        if (!killStealVictimName) {
+          killStealVictimName = p.name;
+          killStealVictimId = p.id;
+        }
       }
       this.pushCombat(p, target, 'monster', killingBlow ? 'foe' : null, killingBlow ? player.name : null);
       if (killingBlow) p.combatTargetId = null;
@@ -470,6 +776,7 @@ export class Game {
         }
         player.moveBlockedUntil = Date.now() + KILLSTEAL_MOVE_BLOCK_MS;
         player.moveBlockedBy = killStealVictimName;
+        player.moveBlockedById = killStealVictimId;
         const sec = Math.ceil(KILLSTEAL_MOVE_BLOCK_MS / 1000);
         this.send(player, { type: 'system', text: `${killStealVictimName}님이 당신의 이동을 방해중입니다. (${sec}초 후 이동가능)` });
       }
@@ -506,6 +813,9 @@ export class Game {
     }
 
     attacker.combatTargetId = `p${target.id}`;
+    // Same rationale as _attackMonster: close any lingering object-view panel
+    // when the fight actually starts.
+    this.send(attacker, { type: 'view', view: null });
 
     const hasWeapon = !!attacker.equipment.weapon;
     const dmgOut = Math.floor(Math.random() * 8) + (hasWeapon ? 8 : 3);
@@ -578,15 +888,23 @@ export class Game {
       clearTimeout(player.pendingMove.timer);
       player.pendingMove = null;
     }
+    if (player.pendingAttack) {
+      clearTimeout(player.pendingAttack.timer);
+      player.pendingAttack = null;
+    }
     player.combatTargetId = null;
     player.downed = false;
     // Death clears any pending kill-steal block — the player is no longer in
     // the disputed room, so the anti-flee gate has nothing to enforce.
     player.moveBlockedUntil = 0;
     player.moveBlockedBy = null;
+    player.moveBlockedById = null;
     player.hp = Math.floor(player.maxHp * 0.3);
     player.roomId = 'square';
     if (fromRoom !== 'square') {
+      // Symmetric to the move case: anyone whose block was anchored to this
+      // player's presence in fromRoom can move freely now.
+      this._clearKillStealBlocksAgainst(player.id, fromRoom);
       this.broadcastRoom(fromRoom, { type: 'text', text: `${player.name}님이 사라졌다.` });
     }
     this.pushStatus(player);
@@ -597,13 +915,28 @@ export class Game {
 
   say(player, text) {
     if (!text) return;
-    this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}: "${text}"` });
+    const now = Date.now();
+    if (now - player.lastSayAt < SAY_COOLDOWN_MS) {
+      // Per-player cooldown: rejected (not queued) so a flood doesn't pile up
+      // delayed broadcasts. Single notice per blocked attempt.
+      this.send(player, { type: 'system', text: '잠시 후 다시 말할 수 있습니다.' });
+      return;
+    }
+    // Truncate, don't reject — long messages still convey intent. The cap
+    // bounds the per-room broadcast cost regardless of payload size.
+    const msg = text.length > SAY_MAX_LEN ? text.slice(0, SAY_MAX_LEN) : text;
+    player.lastSayAt = now;
+    this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}: "${msg}"` });
   }
 
   // --- helpers ---
 
   send(player, msg) {
-    if (player.socket.readyState === 1) player.socket.send(JSON.stringify(msg));
+    // Disconnected players (in grace) have socket=null. Sends are silently
+    // dropped — they catch up via pushStatus/describeRoom on reattach.
+    if (player.socket && player.socket.readyState === 1) {
+      player.socket.send(JSON.stringify(msg));
+    }
   }
 
   seg(player, segments) {
@@ -615,7 +948,7 @@ export class Game {
     for (const p of this.players.values()) {
       if (p.roomId !== roomId) continue;
       if (exceptIds.includes(p.id)) continue;
-      if (p.socket.readyState === 1) p.socket.send(payload);
+      if (p.socket && p.socket.readyState === 1) p.socket.send(payload);
     }
   }
 
@@ -637,11 +970,16 @@ export class Game {
   pushCombat(recipient, foe, kind, fallen = null, killerName = null) {
     const foePayload = kind === 'monster'
       ? { kind, name: foe.name, defId: foe.defId, icon: foe.icon, hp: Math.max(0, foe.hp), maxHp: foe.maxHp }
-      : { kind, name: foe.name, icon: foe.icon, hp: Math.max(0, foe.hp), maxHp: foe.maxHp };
+      // Player foe carries `id` so the client can look up the cached sprite
+      // delivered via prior `character_sprite` messages. Without it, custom
+      // sprites can't be wired to the panel.
+      : { kind, id: foe.id, name: foe.name, icon: foe.icon, hp: Math.max(0, foe.hp), maxHp: foe.maxHp };
     this.send(recipient, {
       type: 'combat',
       combat: {
-        player: { name: recipient.name, icon: recipient.icon, hp: Math.max(0, recipient.hp), maxHp: recipient.maxHp },
+        // Recipient's own id, so the client knows whose sprite to draw on the
+        // "me" side from its character_sprite cache.
+        player: { id: recipient.id, name: recipient.name, icon: recipient.icon, hp: Math.max(0, recipient.hp), maxHp: recipient.maxHp },
         foe: foePayload,
         fallen,
         killerName, // when fallen==='foe' and killer != recipient, the killer's display name
