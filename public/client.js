@@ -774,6 +774,9 @@ promptForm.addEventListener('submit', (e) => {
   appendLine(`> ${input}`, 'line echo');
   sendCmd(input);
   promptInput.value = '';
+  // 모바일에서는 엔터 후 키보드를 내려 채팅 영역을 다시 노출. 데스크톱은
+  // 포커스를 유지해 연속 입력이 끊기지 않게 한다.
+  if (window.matchMedia('(max-width: 768px)').matches) promptInput.blur();
 });
 
 promptInput.addEventListener('keydown', (e) => {
@@ -1231,7 +1234,9 @@ function setupVisualViewport() {
   const root = document.documentElement;
   const sync = () => {
     const h = vv ? vv.height : window.innerHeight;
+    const top = vv ? vv.offsetTop : 0;
     root.style.setProperty('--vvh', h + 'px');
+    root.style.setProperty('--vvtop', top + 'px');
     if (logEl) logEl.scrollTop = logEl.scrollHeight;
   };
   if (vv) {
@@ -1242,7 +1247,7 @@ function setupVisualViewport() {
   }
   if (promptInput) {
     promptInput.addEventListener('focus', () => {
-      // iOS가 키보드 애니메이션 끝낸 직후 visualViewport.height가 안정되므로
+      // iOS가 키보드 애니메이션 끝낸 직후 visualViewport가 안정되므로
       // requestAnimationFrame 한 번으로는 부족 — 약간의 지연 후 한 번 더 동기화.
       setTimeout(sync, 250);
     });

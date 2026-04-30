@@ -24,7 +24,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 html { height: 100%; }
-:root { --vvh: 100dvh; }
+:root { --vvh: 100dvh; --vvtop: 0px; }
 body {
   background: var(--bg);
   color: var(--fg);
@@ -33,13 +33,16 @@ body {
   line-height: 1.55;
   overflow: hidden;
   overscroll-behavior: none;
-  /* --vvh is updated from window.visualViewport.height in JS so the layout
-     shrinks when the iOS keyboard opens and the prompt-form sits flush above
-     it instead of getting clipped under the keyboard. Falls back to 100dvh on
-     desktop or browsers without VisualViewport. */
-  height: var(--vvh, 100dvh);
+  /* --vvh / --vvtop are updated from window.visualViewport in JS so body fills
+     the visual viewport exactly. Without --vvtop the iOS keyboard scrolls the
+     visual viewport down inside the layout viewport, leaving an empty band
+     between prompt-form and the keyboard top; pinning body's top to
+     visualViewport.offsetTop keeps prompt-form flush against the keyboard. */
   position: fixed;
-  inset: 0;
+  left: 0;
+  right: 0;
+  top: var(--vvtop, 0);
+  height: var(--vvh, 100dvh);
 }
 
 #app {
