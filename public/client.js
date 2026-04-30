@@ -209,6 +209,7 @@ function scrollLogToBottom() {
 
 let combatDismissTimer = null;
 let lastCombat = { playerHp: null, foeHp: null };
+let inCombat = false;
 function renderCombat(combat) {
   if (combatDismissTimer) {
     clearTimeout(combatDismissTimer);
@@ -219,9 +220,15 @@ function renderCombat(combat) {
     combatViewEl.innerHTML = '';
     combatViewEl.classList.remove('fading');
     lastCombat = { playerHp: null, foeHp: null };
+    inCombat = false;
+    if (roomMonstersEl) {
+      roomMonstersEl.hidden = true;
+      roomMonstersEl.innerHTML = '';
+    }
     scrollLogToBottom();
     return;
   }
+  inCombat = true;
   combatViewEl.hidden = false;
   combatViewEl.innerHTML = '';
   combatViewEl.classList.remove('fading');
@@ -264,7 +271,7 @@ function renderCombat(combat) {
 // 틱이 일어나면 HP 바가 다시 차오르고, 공격이 들어오면 즉시 줄어든다.
 function renderRoomMonsters(monsters) {
   if (!roomMonstersEl) return;
-  if (!monsters || monsters.length === 0) {
+  if (!inCombat || !monsters || monsters.length === 0) {
     roomMonstersEl.hidden = true;
     roomMonstersEl.innerHTML = '';
     return;

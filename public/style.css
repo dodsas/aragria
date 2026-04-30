@@ -22,20 +22,27 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; margin: 0; }
+html, body { margin: 0; }
+html { height: 100%; }
 body {
   background: var(--bg);
   color: var(--fg);
   font-family: var(--mono);
   font-size: 14px;
   line-height: 1.55;
+  overflow: hidden;
+  overscroll-behavior: none;
+  height: 100vh;
+  height: 100dvh;
+  position: fixed;
+  inset: 0;
 }
 
 #app {
   display: grid;
   grid-template-columns: 416px 6px 1fr;
   grid-template-rows: 1fr;
-  height: 100vh;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -474,20 +481,26 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
 #sidebar-toggle {
   display: none;
   position: fixed;
-  top: 8px;
-  left: 8px;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
   z-index: 11;
-  width: 36px;
-  height: 36px;
+  width: 28px;
+  height: 56px;
   background: var(--bg-panel);
   color: var(--accent);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 18px;
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+  font-size: 20px;
+  line-height: 1;
   cursor: pointer;
+  padding: 0;
   align-items: center;
   justify-content: center;
 }
+#sidebar-toggle::before { content: '›'; font-weight: 700; }
+body[data-sidebar="open"] #sidebar-toggle::before { content: '‹'; }
 #sidebar-toggle:hover { background: var(--bg-elev); }
 #sidebar-backdrop[hidden] { display: none; }
 
@@ -512,8 +525,14 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
   body[data-sidebar="open"] #sidebar { transform: translateX(0); }
   #sidebar-resizer { display: none; }
   #viewport { border-left: none; }
-  #log { padding-left: 56px; }   /* keep log text out from under the toggle button */
+  #log { padding-left: 36px; }   /* leave room for the centered side toggle */
   #sidebar-toggle { display: inline-flex; }
+  body[data-sidebar="open"] #sidebar-toggle {
+    left: min(85vw, 340px);
+    border-radius: 6px 0 0 6px;
+    border-left: 1px solid var(--border);
+    border-right: none;
+  }
   #sidebar-backdrop {
     position: fixed;
     inset: 0;

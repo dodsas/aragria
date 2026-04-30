@@ -84,7 +84,7 @@ export const RECONNECT_GRACE_MS = 30_000;
 // 자동 등록한다. 비활성화는 데모/시연·자동화 테스트·프로필 수집을 일시적으로
 // 끄고 싶을 때 사용. 클라이언트는 이 플래그를 모르며, welcome 메시지의 유무가
 // 그대로 신호 역할을 한다.
-export const REGISTRATION_ENABLED = true;
+export const REGISTRATION_ENABLED = false;
 
 // 자동 등록 시 사용할 디폴트 묘사. DESC_MIN_LEN 이상이어야 하고, 분류기가
 // "wanderer" archetype + "leather" 팔레트로 안정적으로 매핑할 수 있는 한국어
