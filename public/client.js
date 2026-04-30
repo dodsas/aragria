@@ -1220,11 +1220,43 @@ function setupMobileSidebar() {
   backdrop.addEventListener('click', () => setOpen(false));
 }
 
+// iOS Safari가 소프트 키보드를 띄울 때 layout viewport는 그대로 두고 visual
+// viewport만 축소하기 때문에 body의 100dvh 안에서 prompt-form이 키보드 뒤로
+// 가려진다. visualViewport.height를 --vvh에 반영해 body 높이를 시각적으로
+// 보이는 영역에 맞추고, 입력창에 포커스가 가면 키보드가 다 올라온 뒤 한 번 더
+// 동기화 + 로그 하단 스크롤을 강제해 첫 포커스 때 입력창이 보이지 않던 문제와
+// 이후 포커스 때 입력창 위에 빈 공간이 크게 잡히던 문제를 동시에 해결.
+function setupVisualViewport() {
+  const vv = window.visualViewport;
+  const root = document.documentElement;
+  const sync = () => {
+    const h = vv ? vv.height : window.innerHeight;
+    root.style.setProperty('--vvh', h + 'px');
+    if (logEl) logEl.scrollTop = logEl.scrollHeight;
+  };
+  if (vv) {
+    vv.addEventListener('resize', sync);
+    vv.addEventListener('scroll', sync);
+  } else {
+    window.addEventListener('resize', sync);
+  }
+  if (promptInput) {
+    promptInput.addEventListener('focus', () => {
+      // iOS가 키보드 애니메이션 끝낸 직후 visualViewport.height가 안정되므로
+      // requestAnimationFrame 한 번으로는 부족 — 약간의 지연 후 한 번 더 동기화.
+      setTimeout(sync, 250);
+    });
+    promptInput.addEventListener('blur', () => setTimeout(sync, 100));
+  }
+  sync();
+}
+
 buildMap();
 setupSidebarResizer();
 setupMobileSidebar();
 setupDpad();
 setupActionPad();
+setupVisualViewport();
 recomputeMapViewport();
 new ResizeObserver(() => recomputeMapViewport()).observe(document.getElementById('sidebar'));
 setMode('typing');

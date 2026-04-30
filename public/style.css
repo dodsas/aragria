@@ -24,6 +24,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 html { height: 100%; }
+:root { --vvh: 100dvh; }
 body {
   background: var(--bg);
   color: var(--fg);
@@ -32,8 +33,11 @@ body {
   line-height: 1.55;
   overflow: hidden;
   overscroll-behavior: none;
-  height: 100vh;
-  height: 100dvh;
+  /* --vvh is updated from window.visualViewport.height in JS so the layout
+     shrinks when the iOS keyboard opens and the prompt-form sits flush above
+     it instead of getting clipped under the keyboard. Falls back to 100dvh on
+     desktop or browsers without VisualViewport. */
+  height: var(--vvh, 100dvh);
   position: fixed;
   inset: 0;
 }
