@@ -1,6 +1,8 @@
 // Authoritative game state. Single in-memory world.
 // All commands flow through Game.handleCommand(player, input).
 
+import { MONSTER_RESPAWN_MS, DEFAULT_MONSTER_TIER } from './config.js';
+
 let nextPlayerId = 1;
 
 // Forest is a 5×5 grid: forest_<col>_<row>, col/row in 0..4.
@@ -94,16 +96,20 @@ const ROOMS = {
   ...buildForestRooms(),
 };
 
+// Monster definitions. `tier` controls respawn timing (see config.js).
+// Tier 1 = lowest. Higher tiers can be added later with their own respawn ranges.
 const MONSTER_DEFS = {
   goblin: {
+    tier: 1,
     name: '고블린',
-    icon: '👹',
+    icon: '🧌',
     desc: '작고 교활한 눈빛의 녹색 생명체. 녹슨 단검을 들고 있다.',
     hp: 20, maxHp: 20, atk: 5,
   },
   skeleton: {
+    tier: 1,
     name: '해골 전사',
-    icon: '💀',
+    icon: '☠',
     desc: '낡은 갑옷을 입은 뼈만 남은 전사. 텅 빈 눈구멍에서 붉은 빛이 흔들린다.',
     hp: 35, maxHp: 35, atk: 8,
   },
@@ -112,7 +118,16 @@ const MONSTER_DEFS = {
 let nextMonsterId = 1;
 function spawnMonster(defId) {
   const def = MONSTER_DEFS[defId];
-  return { id: nextMonsterId++, defId, name: def.name, icon: def.icon, hp: def.hp, maxHp: def.maxHp, atk: def.atk };
+  return {
+    id: nextMonsterId++,
+    defId,
+    name: def.name,
+    icon: def.icon,
+    hp: def.hp,
+    maxHp: def.maxHp,
+    atk: def.atk,
+    tier: def.tier ?? DEFAULT_MONSTER_TIER,
+  };
 }
 
 // Objects with `view` get UI rendering on `look`. Without `view`, prose only.
@@ -242,6 +257,24 @@ export class Game {
   _spawnMonsters() {
     this.roomMonsters.set('market', [spawnMonster('goblin')]);
     this.roomMonsters.set('temple', [spawnMonster('skeleton')]);
+  }
+
+  scheduleRespawn(roomId, defId) {
+    const def = MONSTER_DEFS[defId];
+    if (!def) return;
+    const tier = def.tier ?? DEFAULT_MONSTER_TIER;
+    const range = MONSTER_RESPAWN_MS[tier] || MONSTER_RESPAWN_MS[DEFAULT_MONSTER_TIER];
+    const [minMs, maxMs] = range;
+    const delay = minMs + Math.floor(Math.random() * (maxMs - minMs + 1));
+    setTimeout(() => {
+      const list = this.roomMonsters.get(roomId) || [];
+      list.push(spawnMonster(defId));
+      this.roomMonsters.set(roomId, list);
+      this.broadcastRoom(roomId, {
+        type: 'text',
+        segments: [{ text: def.name, cls: 'monster-name' }, { text: '이(가) 나타났다.' }],
+      });
+    }, delay);
   }
 
   addPlayer(socket) {
@@ -426,10 +459,12 @@ export class Game {
     ]);
 
     if (target.hp <= 0) {
-      const list = this.roomMonsters.get(player.roomId);
+      const roomId = player.roomId;
+      const list = this.roomMonsters.get(roomId);
       list.splice(list.indexOf(target), 1);
       this.seg(player, [{ text: target.name, cls: 'monster-name' }, { text: '이(가) 쓰러졌다!' }]);
       this.pushCombat(player, target, 'monster');
+      this.scheduleRespawn(roomId, target.defId);
       return;
     }
 
@@ -495,7 +530,7 @@ export class Game {
       type: 'combat',
       combat: {
         player: { name: player.name, icon: player.icon, hp: Math.max(0, player.hp), maxHp: player.maxHp },
-        monster: { name: monster.name, icon: monster.icon, hp: Math.max(0, monster.hp), maxHp: monster.maxHp },
+        monster: { name: monster.name, defId: monster.defId, icon: monster.icon, hp: Math.max(0, monster.hp), maxHp: monster.maxHp },
         fallen, // 'monster' | 'player' | null
       },
     });

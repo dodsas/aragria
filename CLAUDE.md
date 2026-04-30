@@ -50,9 +50,11 @@ The server is unaware of modes — WASD is a thin client wrapper that emits the 
 
 - `server/index.js` — HTTP + WebSocket bootstrap, connection lifecycle.
 - `server/game.js` — world, players, rooms, objects, command dispatch. The single source of truth for game logic.
+- `server/config.js` — tunable knobs (monster respawn timings, etc.). Edit values here, not in `game.js`.
 - `public/index.html`, `public/style.css`, `public/client.js` — the entire client. No build step.
 - `ui_main.md` — sidebar layout contract (position, structure, status protocol).
 - `movement.md` — movement input modes (text vs WASD) and key mapping.
+- `monster.md` — monster definition schema, tier system, and respawn rules.
 
 ### Commands
 

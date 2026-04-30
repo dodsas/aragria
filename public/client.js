@@ -92,13 +92,7 @@ function renderCombat(combat) {
   stage.appendChild(vs);
   stage.appendChild(actorFoe);
 
-  const bars = document.createElement('div');
-  bars.className = 'cv-bars';
-  bars.appendChild(makeCombatBar(combat.player, false, fallen === 'player'));
-  bars.appendChild(makeCombatBar(combat.monster, true, fallen === 'monster'));
-
   combatViewEl.appendChild(stage);
-  combatViewEl.appendChild(bars);
 
   lastCombat = { playerHp: combat.player.hp, monsterHp: combat.monster.hp };
 
@@ -110,6 +104,11 @@ function renderCombat(combat) {
   }
 }
 
+const MONSTER_SPRITES = {
+  goblin: () => goblinSpriteSvg(),
+  skeleton: () => skeletonSpriteSvg(),
+};
+
 function makeCombatActor(actor, isFoe, isFallen, isHurt) {
   const root = document.createElement('div');
   root.className = 'cv-actor' + (isFoe ? ' cv-foe' : ' cv-me')
@@ -117,10 +116,19 @@ function makeCombatActor(actor, isFoe, isFallen, isHurt) {
 
   const sprite = document.createElement('div');
   sprite.className = 'cv-sprite';
-  const icon = document.createElement('div');
-  icon.className = 'cv-icon';
-  icon.textContent = isFallen ? '✝' : (actor.icon || (isFoe ? '👾' : '🧙'));
-  sprite.appendChild(icon);
+  const monsterSvg = isFoe && !isFallen && MONSTER_SPRITES[actor.defId];
+  if (!isFoe && !isFallen) {
+    sprite.classList.add('cv-sprite-svg');
+    sprite.innerHTML = playerSpriteSvg();
+  } else if (monsterSvg) {
+    sprite.classList.add('cv-sprite-svg');
+    sprite.innerHTML = monsterSvg();
+  } else {
+    const icon = document.createElement('div');
+    icon.className = 'cv-icon';
+    icon.textContent = isFallen ? '✝' : (actor.icon || (isFoe ? '👾' : '🧙'));
+    sprite.appendChild(icon);
+  }
 
   const shadow = document.createElement('div');
   shadow.className = 'cv-shadow';
@@ -132,6 +140,7 @@ function makeCombatActor(actor, isFoe, isFallen, isHurt) {
   root.appendChild(sprite);
   root.appendChild(shadow);
   root.appendChild(name);
+  root.appendChild(makeCombatBar(actor, isFoe, isFallen));
   return root;
 }
 
@@ -139,26 +148,178 @@ function makeCombatBar(actor, isFoe, isFallen) {
   const row = document.createElement('div');
   row.className = 'cv-bar-row' + (isFoe ? ' cv-foe' : ' cv-me') + (isFallen ? ' cv-fallen' : '');
 
-  const label = document.createElement('div');
-  label.className = 'cv-bar-label';
-  label.textContent = isFoe ? '적 HP' : 'HP';
-
-  const track = document.createElement('div');
-  track.className = 'cv-bar-track';
-  const fill = document.createElement('div');
   const max = actor.maxHp || 1;
-  const pct = Math.max(0, Math.min(100, (actor.hp / max) * 100));
-  fill.className = 'cv-bar-fill' + (pct < 25 ? ' crit' : pct < 50 ? ' low' : '');
-  fill.style.width = `${pct}%`;
+  const hp = Math.max(0, actor.hp);
+  const cells = 12;
+  const filled = Math.round((hp / max) * cells);
+  const blocks = '█'.repeat(filled) + '░'.repeat(cells - filled);
+
+  const line = document.createElement('div');
+  line.className = 'cv-bar-line';
+  const open = document.createElement('span');
+  open.className = 'cv-bar-bracket';
+  open.textContent = '[';
+  const fill = document.createElement('span');
+  fill.className = 'cv-bar-blocks';
+  fill.textContent = blocks;
+  const close = document.createElement('span');
+  close.className = 'cv-bar-bracket';
+  close.textContent = ']';
+  line.appendChild(open);
+  line.appendChild(fill);
+  line.appendChild(close);
+
   const num = document.createElement('div');
   num.className = 'cv-bar-num';
-  num.textContent = `${actor.hp} / ${actor.maxHp}`;
-  track.appendChild(fill);
-  track.appendChild(num);
+  num.textContent = `${hp} / ${actor.maxHp}`;
 
-  row.appendChild(label);
-  row.appendChild(track);
+  row.appendChild(line);
+  row.appendChild(num);
   return row;
+}
+
+function playerSpriteSvg() {
+  return `<svg viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <linearGradient id="pcRobe" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#fbf6ea"/>
+        <stop offset="100%" stop-color="#cfc1a1"/>
+      </linearGradient>
+      <linearGradient id="pcHat" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#ffffff"/>
+        <stop offset="100%" stop-color="#dccfb1"/>
+      </linearGradient>
+    </defs>
+    <g>
+      <line x1="80" y1="22" x2="92" y2="135" stroke="#a55a2a" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M76,16 L82,8 L86,18 L80,24 Z" fill="#7ec9ff" stroke="#2d5a8f" stroke-width="0.6"/>
+      <path d="M82,8 L86,18 L88,10 Z" fill="#a8dcff"/>
+      <path d="M82,22 Q88,28 84,36 Q80,30 82,22 Z" fill="#e08a3c"/>
+    </g>
+    <path d="M34,35 Q28,55 32,90 Q34,108 36,120 L44,118 Q40,90 42,60 Z" fill="#5a3a22"/>
+    <path d="M66,35 Q72,55 70,80 Q72,100 68,118 L60,118 Q62,90 60,60 Z" fill="#5a3a22"/>
+    <path d="M28,72 Q22,105 22,135 L78,135 Q78,105 72,72 Q60,76 50,76 Q40,76 28,72 Z"
+          fill="url(#pcRobe)" stroke="#8c7a55" stroke-width="0.7"/>
+    <path d="M30,128 Q40,124 50,128 Q60,124 70,128 L70,135 L30,135 Z" fill="#e08a3c"/>
+    <path d="M40,55 Q40,68 38,76 Q50,80 62,76 Q60,68 60,55 Z" fill="#fbf6ea" stroke="#8c7a55" stroke-width="0.6"/>
+    <path d="M36,72 Q50,77 64,72 L64,80 Q50,85 36,80 Z" fill="#d97a32"/>
+    <circle cx="50" cy="76" r="2" fill="#7ec9ff" stroke="#2d5a8f" stroke-width="0.4"/>
+    <path d="M34,76 L28,92 L32,92 Z" fill="#d97a32"/>
+    <path d="M66,76 L72,92 L68,92 Z" fill="#d97a32"/>
+    <rect x="46" y="46" width="8" height="10" fill="#f0d5b0"/>
+    <ellipse cx="50" cy="38" rx="11" ry="13" fill="#f5dfbe"/>
+    <ellipse cx="45.5" cy="40" rx="1.2" ry="2" fill="#3a2418"/>
+    <ellipse cx="54.5" cy="40" rx="1.2" ry="2" fill="#3a2418"/>
+    <circle cx="46" cy="39.5" r="0.4" fill="#fff"/>
+    <circle cx="55" cy="39.5" r="0.4" fill="#fff"/>
+    <ellipse cx="42" cy="44" rx="1.5" ry="1" fill="#f0a890" opacity="0.6"/>
+    <ellipse cx="58" cy="44" rx="1.5" ry="1" fill="#f0a890" opacity="0.6"/>
+    <path d="M48,46.5 Q50,48 52,46.5" fill="none" stroke="#a04030" stroke-width="0.8" stroke-linecap="round"/>
+    <path d="M40,28 Q44,38 42,46 L48,42 Q46,32 46,26 Z" fill="#5a3a22"/>
+    <path d="M60,28 Q56,38 58,46 L52,42 Q54,32 54,26 Z" fill="#5a3a22"/>
+    <path d="M46,26 Q50,30 54,26 L52,32 Q50,33 48,32 Z" fill="#5a3a22"/>
+    <ellipse cx="50" cy="24" rx="26" ry="6" fill="url(#pcHat)" stroke="#8c7a55" stroke-width="0.7"/>
+    <path d="M38,24 Q40,8 50,6 Q60,8 62,24 Z" fill="url(#pcHat)" stroke="#8c7a55" stroke-width="0.7"/>
+    <path d="M38,24 Q50,28 62,24" fill="none" stroke="#d97a32" stroke-width="2.2"/>
+    <circle cx="40" cy="25" r="2" fill="#e3a13a"/>
+    <circle cx="40" cy="25" r="0.8" fill="#fbeac0"/>
+    <path d="M58,10 Q70,2 80,2 Q72,12 64,18" fill="#fbf6ea" stroke="#a89770" stroke-width="0.5"/>
+    <path d="M62,8 Q72,4 80,2" fill="none" stroke="#a89770" stroke-width="0.4"/>
+    <path d="M62,60 Q72,56 80,52" fill="none" stroke="#fbf6ea" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="80" cy="52" r="3" fill="#f5dfbe"/>
+    <path d="M40,60 Q34,40 38,28" fill="none" stroke="#fbf6ea" stroke-width="5.5" stroke-linecap="round"/>
+    <circle cx="38" cy="28" r="2.5" fill="#f5dfbe"/>
+  </svg>`;
+}
+
+function goblinSpriteSvg() {
+  return `<svg viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M40,113 L38,135 L46,135 L46,113 Z" fill="#7ba84a" stroke="#2a1a10" stroke-width="0.7"/>
+    <path d="M54,113 L54,135 L62,135 L60,113 Z" fill="#7ba84a" stroke="#2a1a10" stroke-width="0.7"/>
+    <path d="M35,90 L65,90 L70,118 L30,118 Z" fill="#5a3a1f" stroke="#2a1a10" stroke-width="0.7"/>
+    <path d="M40,95 L46,108 L42,108 Z" fill="#3a2410"/>
+    <path d="M58,93 L62,107 L56,108 Z" fill="#3a2410"/>
+    <path d="M28,55 Q26,80 34,95 L66,95 Q74,80 72,55 Q60,52 50,52 Q40,52 28,55 Z"
+          fill="#7ba84a" stroke="#2a1a10" stroke-width="0.8"/>
+    <path d="M40,75 Q50,80 60,75 L60,90 Q50,86 40,90 Z" fill="#5a8035" opacity="0.55"/>
+    <path d="M44,68 L48,72 M52,72 L56,68 M48,80 L52,80" stroke="#3a2410" stroke-width="0.6" fill="none"/>
+    <path d="M68,60 Q80,68 84,90" fill="none" stroke="#7ba84a" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="84" cy="90" r="3.5" fill="#7ba84a" stroke="#2a1a10" stroke-width="0.5"/>
+    <line x1="84" y1="86" x2="93" y2="62" stroke="#bfc6cf" stroke-width="2.2" stroke-linecap="round"/>
+    <line x1="86" y1="64" x2="92" y2="60" stroke="#8a3d22" stroke-width="0.8"/>
+    <line x1="78" y1="86" x2="88" y2="86" stroke="#3a2410" stroke-width="2.2" stroke-linecap="round"/>
+    <path d="M32,60 Q22,72 22,92" fill="none" stroke="#7ba84a" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="22" cy="92" r="3.5" fill="#7ba84a" stroke="#2a1a10" stroke-width="0.5"/>
+    <rect x="44" y="42" width="12" height="11" fill="#7ba84a"/>
+    <ellipse cx="50" cy="32" rx="16" ry="14" fill="#7ba84a" stroke="#2a1a10" stroke-width="0.8"/>
+    <path d="M34,30 L18,16 L28,34 Z" fill="#7ba84a" stroke="#2a1a10" stroke-width="0.6"/>
+    <path d="M66,30 L82,16 L72,34 Z" fill="#7ba84a" stroke="#2a1a10" stroke-width="0.6"/>
+    <path d="M28,28 L23,21 L27,32 Z" fill="#5a8035"/>
+    <path d="M72,28 L77,21 L73,32 Z" fill="#5a8035"/>
+    <path d="M38,24 Q44,28 48,29" stroke="#3a2410" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+    <path d="M62,24 Q56,28 52,29" stroke="#3a2410" stroke-width="1.6" stroke-linecap="round" fill="none"/>
+    <ellipse cx="44" cy="33" rx="2.6" ry="3" fill="#fff8e0"/>
+    <ellipse cx="56" cy="33" rx="2.6" ry="3" fill="#fff8e0"/>
+    <circle cx="44" cy="33.5" r="1.4" fill="#e84020"/>
+    <circle cx="56" cy="33.5" r="1.4" fill="#e84020"/>
+    <circle cx="43.5" cy="33" r="0.4" fill="#000"/>
+    <circle cx="55.5" cy="33" r="0.4" fill="#000"/>
+    <path d="M48,37 L52,37 L50,41 Z" fill="#5a8035"/>
+    <path d="M42,43 L58,43 L56,46 L52,48 L48,48 L44,46 Z" fill="#3a2410"/>
+    <path d="M44,43 L46,46 M48,43 L48,47 M52,43 L52,47 M56,43 L54,46" stroke="#fff8e0" stroke-width="0.8"/>
+  </svg>`;
+}
+
+function skeletonSpriteSvg() {
+  return `<svg viewBox="0 0 100 140" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <defs>
+      <radialGradient id="skEye" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#ffd060"/>
+        <stop offset="60%" stop-color="#ff5020"/>
+        <stop offset="100%" stop-color="#5a0a00"/>
+      </radialGradient>
+    </defs>
+    <path d="M26,55 L18,132 L32,130 L36,60 Z" fill="#3a1a1a" stroke="#1a0a0a" stroke-width="0.6"/>
+    <path d="M74,55 L82,132 L68,130 L64,60 Z" fill="#3a1a1a" stroke="#1a0a0a" stroke-width="0.6"/>
+    <line x1="80" y1="58" x2="94" y2="14" stroke="#bfc6cf" stroke-width="3" stroke-linecap="round"/>
+    <path d="M91,12 L97,16 L94,18 Z" fill="#bfc6cf"/>
+    <line x1="74" y1="60" x2="86" y2="56" stroke="#5a3a1f" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="72" cy="62" r="2.5" fill="#c87a3a" stroke="#3a2410" stroke-width="0.5"/>
+    <rect x="42" y="100" width="6" height="35" fill="#e5e0d0" stroke="#2a2520" stroke-width="0.7"/>
+    <rect x="52" y="100" width="6" height="35" fill="#e5e0d0" stroke="#2a2520" stroke-width="0.7"/>
+    <circle cx="45" cy="115" r="2.6" fill="#e5e0d0" stroke="#2a2520" stroke-width="0.5"/>
+    <circle cx="55" cy="115" r="2.6" fill="#e5e0d0" stroke="#2a2520" stroke-width="0.5"/>
+    <path d="M36,92 L64,92 L62,103 L38,103 Z" fill="#5a3a1f" stroke="#2a2520" stroke-width="0.7"/>
+    <rect x="46" y="95" width="8" height="5" fill="#c87a3a"/>
+    <path d="M36,55 Q34,80 38,92 L62,92 Q66,80 64,55 Z" fill="#e5e0d0" stroke="#2a2520" stroke-width="0.7"/>
+    <path d="M40,62 Q50,66 60,62" fill="none" stroke="#8a7a55" stroke-width="0.8"/>
+    <path d="M40,70 Q50,74 60,70" fill="none" stroke="#8a7a55" stroke-width="0.8"/>
+    <path d="M40,78 Q50,82 60,78" fill="none" stroke="#8a7a55" stroke-width="0.8"/>
+    <line x1="50" y1="58" x2="50" y2="88" stroke="#8a7a55" stroke-width="0.8"/>
+    <path d="M28,52 Q28,60 36,62 L42,55 Q40,46 32,46 Z" fill="#3a3a44" stroke="#1a1a22" stroke-width="0.7"/>
+    <path d="M72,52 Q72,60 64,62 L58,55 Q60,46 68,46 Z" fill="#3a3a44" stroke="#1a1a22" stroke-width="0.7"/>
+    <path d="M30,46 L26,38 L33,44 Z" fill="#5a5a64" stroke="#1a1a22" stroke-width="0.5"/>
+    <path d="M70,46 L74,38 L67,44 Z" fill="#5a5a64" stroke="#1a1a22" stroke-width="0.5"/>
+    <path d="M64,58 Q70,62 72,62" fill="none" stroke="#e5e0d0" stroke-width="5" stroke-linecap="round"/>
+    <path d="M36,58 Q30,75 28,90" fill="none" stroke="#e5e0d0" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="28" cy="90" r="3" fill="#e5e0d0" stroke="#2a2520" stroke-width="0.5"/>
+    <ellipse cx="50" cy="30" rx="14" ry="16" fill="#f0eadc" stroke="#2a2520" stroke-width="0.8"/>
+    <path d="M40,40 Q50,46 60,40 L60,46 Q50,50 40,46 Z" fill="#d4cdb8"/>
+    <ellipse cx="44" cy="30" rx="3.2" ry="4" fill="#1a0a0a"/>
+    <ellipse cx="56" cy="30" rx="3.2" ry="4" fill="#1a0a0a"/>
+    <circle cx="44" cy="30" r="2" fill="url(#skEye)"/>
+    <circle cx="56" cy="30" r="2" fill="url(#skEye)"/>
+    <path d="M48,36 L52,36 L50,40 Z" fill="#1a0a0a"/>
+    <path d="M40,42 L60,42 L58,47 L42,47 Z" fill="#f0eadc" stroke="#2a2520" stroke-width="0.4"/>
+    <line x1="44" y1="42" x2="44" y2="47" stroke="#2a2520" stroke-width="0.6"/>
+    <line x1="48" y1="42" x2="48" y2="47" stroke="#2a2520" stroke-width="0.6"/>
+    <line x1="52" y1="42" x2="52" y2="47" stroke="#2a2520" stroke-width="0.6"/>
+    <line x1="56" y1="42" x2="56" y2="47" stroke="#2a2520" stroke-width="0.6"/>
+    <path d="M34,22 Q50,10 66,22 L66,28 Q50,20 34,28 Z" fill="#2a2a32" stroke="#1a1a22" stroke-width="0.6"/>
+    <path d="M36,22 Q32,12 28,10 Q32,18 36,22 Z" fill="#4a3a2a" stroke="#1a1a22" stroke-width="0.4"/>
+    <path d="M64,22 Q68,12 72,10 Q68,18 64,22 Z" fill="#4a3a2a" stroke="#1a1a22" stroke-width="0.4"/>
+    <path d="M48,22 L50,18 L52,22 Z" fill="#5a5a64"/>
+  </svg>`;
 }
 
 const escapeHtml = (s) => s

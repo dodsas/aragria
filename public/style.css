@@ -138,14 +138,26 @@ body {
   transform-origin: bottom center;
   animation: cv-bob 2.4s ease-in-out infinite;
 }
+#combat-view .cv-sprite-svg {
+  font-size: 0;
+  width: 86px;
+  height: 120px;
+}
+#combat-view .cv-sprite-svg svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
 #combat-view .cv-foe .cv-sprite { animation-delay: 1.2s; }
 #combat-view .cv-foe .cv-icon { display: inline-block; transform: scaleX(-1); }
+#combat-view .cv-foe .cv-sprite-svg svg { transform: scaleX(-1); }
 #combat-view .cv-shadow {
   width: 56px;
   height: 8px;
   margin-top: 2px;
   background: radial-gradient(ellipse, rgba(0, 0, 0, 0.75), transparent 70%);
 }
+#combat-view .cv-me .cv-shadow { width: 78px; }
 #combat-view .cv-name {
   margin-top: 6px;
   font-size: 13px;
@@ -163,66 +175,28 @@ body {
   letter-spacing: 0.2em;
 }
 
-/* — HP bars panel under the stage — */
-#combat-view .cv-bars {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-  padding: 12px 18px 14px;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.35));
-  border-top: 1px solid var(--accent-soft);
-}
+/* — HP bar centered under each actor — */
 #combat-view .cv-bar-row {
-  display: grid;
-  grid-template-rows: auto auto;
-  gap: 4px;
-  min-width: 0;
-}
-#combat-view .cv-bar-label {
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--fg-dim);
-}
-#combat-view .cv-bar-row.cv-foe .cv-bar-label { color: var(--c-monster); }
-#combat-view .cv-bar-track {
-  position: relative;
-  height: 16px;
-  border: 1px solid #2c2e36;
-  border-radius: 2px;
-  background:
-    repeating-linear-gradient(90deg, transparent 0 4px, rgba(0, 0, 0, 0.45) 4px 5px),
-    #0a0b0e;
-  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.6), inset 0 -1px 0 rgba(255, 255, 255, 0.04);
-  overflow: hidden;
-}
-#combat-view .cv-bar-fill {
-  height: 100%;
-  background: linear-gradient(180deg, #94e090 0%, #4f9b4c 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), inset 0 -2px 4px rgba(0, 0, 0, 0.35);
-  transition: width 0.35s ease;
-  position: relative;
-}
-#combat-view .cv-bar-fill::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(90deg, transparent 0 4px, rgba(255, 255, 255, 0.07) 4px 5px);
-  pointer-events: none;
-}
-#combat-view .cv-bar-fill.low  { background: linear-gradient(180deg, #efce6c 0%, #a3853a 100%); }
-#combat-view .cv-bar-fill.crit { background: linear-gradient(180deg, #e07b50 0%, #a13830 100%); }
-#combat-view .cv-bar-num {
-  position: absolute;
-  inset: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: #fff;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+  gap: 1px;
+  margin-top: 6px;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'Courier New', monospace;
+  white-space: nowrap;
+}
+#combat-view .cv-bar-line {
+  font-size: 12px;
+  letter-spacing: 0;
+  line-height: 1.1;
+}
+#combat-view .cv-bar-bracket { color: var(--fg-dim); }
+#combat-view .cv-bar-row.cv-me  .cv-bar-blocks { color: #4caf50; }
+#combat-view .cv-bar-row.cv-foe .cv-bar-blocks { color: #d04040; }
+#combat-view .cv-bar-num {
+  color: var(--fg-dim);
   font-variant-numeric: tabular-nums;
+  font-size: 11px;
   letter-spacing: 0.04em;
 }
 
@@ -234,7 +208,7 @@ body {
 }
 #combat-view .cv-foe.cv-fallen .cv-sprite { transform: rotate(12deg) translateY(2px); }
 #combat-view .cv-actor.cv-fallen .cv-name { color: var(--fg-dim); text-decoration: line-through; }
-#combat-view .cv-bar-row.cv-fallen .cv-bar-fill { background: var(--fg-dim); }
+#combat-view .cv-bar-row.cv-fallen .cv-bar-blocks { color: var(--fg-dim); }
 
 /* — Hit reaction shake — */
 #combat-view .cv-actor.cv-hurt .cv-sprite { animation: cv-shake 0.35s ease both; }
