@@ -24,10 +24,23 @@ body {
 
 #app {
   display: grid;
-  grid-template-columns: 416px 1fr;
+  grid-template-columns: 416px 6px 1fr;
   grid-template-rows: 1fr;
   height: 100vh;
   overflow: hidden;
+}
+
+#sidebar-resizer {
+  cursor: ew-resize;
+  background: var(--border);
+  border-left: 1px solid var(--bg);
+  border-right: 1px solid var(--bg);
+  transition: background 0.1s;
+  user-select: none;
+}
+#sidebar-resizer:hover,
+#sidebar-resizer.dragging {
+  background: var(--accent-soft);
 }
 
 /* ── Viewport (text MUD) ───────────────────────────────── */
@@ -160,8 +173,11 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
 /* ── Map ───────────────────────────────────────────────── */
 #map-canvas {
   position: relative;
+  /* width is set by JS at runtime to fit a whole number of columns into the
+     available sidebar width — see recomputeMapViewport(). The fallback below
+     covers the brief moment before JS runs. */
   width: 384px;   /* VIEWPORT_COLS(4) × COL_STEP(96) */
-  height: 124px;  /* (VIEWPORT_ROWS-1)(3) × ROW_STEP(34) + ROOM_H(22) */
+  height: 136px;  /* VIEWPORT_ROWS(4) × ROW_STEP(34) */
   overflow: hidden;
   margin: 0 auto;
 }

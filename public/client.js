@@ -279,9 +279,14 @@ function buildMapRooms() {
       };
     }
   }
+  // Cells are centered inside their (COL_STEP × ROW_STEP) slot so that when
+  // the canvas width shrinks to N×COL_STEP (fewer visible cols), the visible
+  // cells remain symmetrically padded inside the canvas.
+  const xPad = (COL_STEP - ROOM_W) / 2;
+  const yPad = (ROW_STEP - ROOM_H) / 2;
   for (const room of Object.values(rooms)) {
-    room.x = room.col * COL_STEP;
-    room.y = room.row * ROW_STEP;
+    room.x = room.col * COL_STEP + xPad;
+    room.y = room.row * ROW_STEP + yPad;
   }
   return rooms;
 }
@@ -381,12 +386,18 @@ function buildMap() {
 
 let mapReady = false;
 let camCol = 0, camRow = 0;
+let viewCols = VIEWPORT_COLS;
+let viewRows = VIEWPORT_ROWS;
+let lastRoomId = null;
 
-// Slide camera so that at least EDGE_BUFFER cells of context stay visible on
-// each side of the player. The camera only moves when the player crosses into
-// the buffer zone, so connection lines into the off-viewport rooms remain
-// partly drawn through that buffer (clipped by overflow:hidden).
+// Slide camera so that EDGE_BUFFER cells of context stay visible on each side
+// of the player. The camera only moves when the player crosses into the buffer
+// zone, so connection lines into off-viewport rooms remain partly drawn
+// through that buffer (clipped by overflow:hidden). When viewport is too tight
+// to honor the buffer (e.g. only 1–2 cells visible), edge is scaled down so
+// the player never falls outside the viewport.
 function panAxis(pos, cam, viewport, edge) {
+  edge = Math.max(0, Math.min(edge, Math.floor((viewport - 1) / 2)));
   if (pos >= cam + viewport - edge) cam = pos - viewport + 1 + edge;
   else if (pos - edge < cam) cam = pos - edge;
   return Math.max(0, cam);
@@ -395,14 +406,15 @@ function panAxis(pos, cam, viewport, edge) {
 function updateMapPlayer(roomId) {
   const room = MAP_ROOMS[roomId];
   if (!room) return;
+  lastRoomId = roomId;
 
   for (const el of document.querySelectorAll('.map-room')) {
     el.classList.toggle('current', el.dataset.room === roomId);
   }
 
   const EDGE_BUFFER = 1;
-  camCol = panAxis(room.col, camCol, VIEWPORT_COLS, EDGE_BUFFER);
-  camRow = panAxis(room.row, camRow, VIEWPORT_ROWS, EDGE_BUFFER);
+  camCol = panAxis(room.col, camCol, viewCols, EDGE_BUFFER);
+  camRow = panAxis(room.row, camRow, viewRows, EDGE_BUFFER);
 
   const marker = document.getElementById('map-player');
   const inner  = document.getElementById('map-inner');
@@ -426,6 +438,65 @@ function updateMapPlayer(roomId) {
   }
 }
 
+// Compute how many whole columns fit in the available width inside the map's
+// parent (`.status-block`) and resize the canvas to exactly that many slots.
+// Cells that would be partially clipped never render — overflow:hidden clips
+// them and panAxis keeps the player inside the visible window. The canvas is
+// `margin: 0 auto`, so shrinking the canvas centers it within the sidebar.
+function recomputeMapViewport() {
+  const canvas = document.getElementById('map-canvas');
+  if (!canvas) return;
+  const parent = canvas.parentElement;
+  const cs = getComputedStyle(parent);
+  const padL = parseFloat(cs.paddingLeft) || 0;
+  const padR = parseFloat(cs.paddingRight) || 0;
+  const available = Math.max(0, parent.clientWidth - padL - padR);
+
+  let totalCols = 0;
+  for (const r of Object.values(MAP_ROOMS)) {
+    if (r.col + 1 > totalCols) totalCols = r.col + 1;
+  }
+  const fits = Math.floor(available / COL_STEP);
+  viewCols = Math.max(1, Math.min(fits, totalCols));
+  canvas.style.width = `${viewCols * COL_STEP}px`;
+
+  if (lastRoomId) updateMapPlayer(lastRoomId);
+}
+
+function setupSidebarResizer() {
+  const resizer = document.getElementById('sidebar-resizer');
+  const app = document.getElementById('app');
+  if (!resizer || !app) return;
+
+  let dragging = false, startX = 0, startW = 0;
+  const RESIZER_W = 6;
+  const MIN_SIDEBAR = 200;
+  const MIN_VIEWPORT = 240;
+
+  resizer.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startW = document.getElementById('sidebar').getBoundingClientRect().width;
+    resizer.setPointerCapture(e.pointerId);
+    resizer.classList.add('dragging');
+  });
+  resizer.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    const maxW = window.innerWidth - MIN_VIEWPORT - RESIZER_W;
+    const newW = Math.max(MIN_SIDEBAR, Math.min(maxW, startW + dx));
+    app.style.gridTemplateColumns = `${newW}px ${RESIZER_W}px 1fr`;
+  });
+  const stop = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    if (e.pointerId != null) resizer.releasePointerCapture(e.pointerId);
+    resizer.classList.remove('dragging');
+  };
+  resizer.addEventListener('pointerup', stop);
+  resizer.addEventListener('pointercancel', stop);
+}
+
 // ── Inventory click (event delegation) ──────────────────
 inventoryEl.addEventListener('click', (e) => {
   const li = e.target.closest('li[data-item-id]');
@@ -436,5 +507,8 @@ inventoryEl.addEventListener('click', (e) => {
 });
 
 buildMap();
+setupSidebarResizer();
+recomputeMapViewport();
+new ResizeObserver(() => recomputeMapViewport()).observe(document.getElementById('sidebar'));
 setMode('typing');
 connect();
