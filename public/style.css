@@ -160,8 +160,8 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
 /* ── Map ───────────────────────────────────────────────── */
 #map-canvas {
   position: relative;
-  width: 150px;   /* VIEWPORT_COLS(3) × COL_STEP(50) */
-  height: 102px;  /* 3×ROW_STEP(28) + ROOM_H(18) */
+  width: 288px;   /* VIEWPORT_COLS(3) × COL_STEP(96) */
+  height: 124px;  /* 3×ROW_STEP(34) + ROOM_H(22) */
   overflow: hidden;
   margin: 0 auto;
 }

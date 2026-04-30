@@ -341,10 +341,13 @@ function updateMapPlayer(roomId) {
     el.classList.toggle('current', el.dataset.room === roomId);
   }
 
-  // slide camera to keep player in the 4-wide viewport
+  // Keep at least 1 column of context visible on each side of the player so
+  // connection lines into adjacent (off-viewport) areas remain partly visible.
+  // Camera only slides when the player gets within `EDGE_BUFFER` of an edge.
   const col = room.col;
-  if (col >= camCol + VIEWPORT_COLS) camCol = col - VIEWPORT_COLS + 1;
-  else if (col < camCol) camCol = col;
+  const EDGE_BUFFER = 1;
+  if (col >= camCol + VIEWPORT_COLS - EDGE_BUFFER) camCol = col - VIEWPORT_COLS + 1 + EDGE_BUFFER;
+  else if (col - EDGE_BUFFER < camCol) camCol = col - EDGE_BUFFER;
 
   const marker = document.getElementById('map-player');
   const inner  = document.getElementById('map-inner');
