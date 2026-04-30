@@ -24,7 +24,7 @@ body {
 
 #app {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  grid-template-columns: 416px 1fr;
   grid-template-rows: 1fr;
   height: 100vh;
   overflow: hidden;
@@ -201,6 +201,21 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
   color: #7ab87a;
   background: #132013;
 }
+/* Exit stubs: short marks indicating an exit in a given direction. They sit
+   half inside the cell and half in the gap, so even when a cell is at the
+   viewport edge, the inside half still shows where a path leaves the cell. */
+.map-room .stub {
+  position: absolute;
+  background: var(--border);
+  pointer-events: none;
+}
+.map-room.current .stub { background: var(--accent-soft); }
+.map-room.forest .stub { background: #243324; }
+.map-room.forest.current .stub { background: #3a6a3a; }
+.map-room .stub-n { top: -4px; left: calc(50% - 1px); width: 2px; height: 8px; }
+.map-room .stub-s { bottom: -4px; left: calc(50% - 1px); width: 2px; height: 8px; }
+.map-room .stub-e { right: -4px; top: calc(50% - 1px); width: 8px; height: 2px; }
+.map-room .stub-w { left: -4px; top: calc(50% - 1px); width: 8px; height: 2px; }
 #map-player {
   position: absolute;
   left: 0;

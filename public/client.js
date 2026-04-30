@@ -302,8 +302,26 @@ function buildMapConns() {
   return conns;
 }
 
+// Per-room set of exit directions, derived from MAP_CONNS. Used to render a
+// short stub on the room cell for each direction, so the player can see where
+// paths leave a cell even when the adjacent cell is off-viewport.
+function buildMapExits() {
+  const exits = {};
+  for (const [a, b] of MAP_CONNS) {
+    const ra = MAP_ROOMS[a], rb = MAP_ROOMS[b];
+    if (!exits[a]) exits[a] = new Set();
+    if (!exits[b]) exits[b] = new Set();
+    if (ra.col < rb.col)      { exits[a].add('e'); exits[b].add('w'); }
+    else if (ra.col > rb.col) { exits[a].add('w'); exits[b].add('e'); }
+    else if (ra.row < rb.row) { exits[a].add('s'); exits[b].add('n'); }
+    else                      { exits[a].add('n'); exits[b].add('s'); }
+  }
+  return exits;
+}
+
 const MAP_ROOMS = buildMapRooms();
 const MAP_CONNS = buildMapConns();
+const MAP_EXITS = buildMapExits();
 
 function buildMap() {
   const canvas = document.getElementById('map-canvas');
@@ -348,6 +366,11 @@ function buildMap() {
     div.textContent = room.label;
     div.style.left = `${room.x}px`;
     div.style.top = `${room.y}px`;
+    for (const dir of MAP_EXITS[id] || []) {
+      const stub = document.createElement('span');
+      stub.className = `stub stub-${dir}`;
+      div.appendChild(stub);
+    }
     inner.appendChild(div);
   }
 
