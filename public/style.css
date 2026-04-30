@@ -24,7 +24,6 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 html { height: 100%; }
-:root { --vvh: 100dvh; --vvtop: 0px; }
 body {
   background: var(--bg);
   color: var(--fg);
@@ -33,16 +32,9 @@ body {
   line-height: 1.55;
   overflow: hidden;
   overscroll-behavior: none;
-  /* --vvh / --vvtop are updated from window.visualViewport in JS so body fills
-     the visual viewport exactly. Without --vvtop the iOS keyboard scrolls the
-     visual viewport down inside the layout viewport, leaving an empty band
-     between prompt-form and the keyboard top; pinning body's top to
-     visualViewport.offsetTop keeps prompt-form flush against the keyboard. */
+  height: 100dvh;
   position: fixed;
-  left: 0;
-  right: 0;
-  top: var(--vvtop, 0);
-  height: var(--vvh, 100dvh);
+  inset: 0;
 }
 
 #app {
@@ -504,6 +496,22 @@ body[data-sidebar="open"] #sidebar-toggle::before { content: '‹'; }
      restores. Bump prompt + register inputs to 16px on mobile. */
   #prompt,
   #welcome-form input { font-size: 16px; }
+  /* While the prompt is focused, float the form to the very top of the layout
+     viewport. Keyboard sizes vary across devices/iOS versions/predictive bars,
+     so chasing visualViewport metrics is fragile — anchoring the input above
+     any possible keyboard is the robust answer. submit() blurs the input on
+     mobile, which removes data-prompt-focused and snaps the form back to its
+     normal position at the bottom of the viewport. */
+  body[data-prompt-focused="1"] #prompt-form {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 20;
+    border-top: none;
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  }
   #touch-controls {
     display: flex;
     align-items: center;

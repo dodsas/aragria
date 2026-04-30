@@ -1223,37 +1223,19 @@ function setupMobileSidebar() {
   backdrop.addEventListener('click', () => setOpen(false));
 }
 
-// iOS Safari가 소프트 키보드를 띄울 때 layout viewport는 그대로 두고 visual
-// viewport만 축소하기 때문에 body의 100dvh 안에서 prompt-form이 키보드 뒤로
-// 가려진다. visualViewport.height를 --vvh에 반영해 body 높이를 시각적으로
-// 보이는 영역에 맞추고, 입력창에 포커스가 가면 키보드가 다 올라온 뒤 한 번 더
-// 동기화 + 로그 하단 스크롤을 강제해 첫 포커스 때 입력창이 보이지 않던 문제와
-// 이후 포커스 때 입력창 위에 빈 공간이 크게 잡히던 문제를 동시에 해결.
-function setupVisualViewport() {
-  const vv = window.visualViewport;
-  const root = document.documentElement;
-  const sync = () => {
-    const h = vv ? vv.height : window.innerHeight;
-    const top = vv ? vv.offsetTop : 0;
-    root.style.setProperty('--vvh', h + 'px');
-    root.style.setProperty('--vvtop', top + 'px');
-    if (logEl) logEl.scrollTop = logEl.scrollHeight;
-  };
-  if (vv) {
-    vv.addEventListener('resize', sync);
-    vv.addEventListener('scroll', sync);
-  } else {
-    window.addEventListener('resize', sync);
-  }
-  if (promptInput) {
-    promptInput.addEventListener('focus', () => {
-      // iOS가 키보드 애니메이션 끝낸 직후 visualViewport가 안정되므로
-      // requestAnimationFrame 한 번으로는 부족 — 약간의 지연 후 한 번 더 동기화.
-      setTimeout(sync, 250);
-    });
-    promptInput.addEventListener('blur', () => setTimeout(sync, 100));
-  }
-  sync();
+// 모바일에서 prompt 입력창이 포커스를 받으면 form을 layout viewport 상단으로
+// 띄워 키보드 크기와 무관하게 항상 노출. blur(엔터 후 자동 호출 또는 외부
+// 터치)되면 data-prompt-focused 플래그가 풀려 원래 viewport 하단으로 복귀.
+// visualViewport.height를 추적하는 기존 방식보다 단순하고 robust — predictive
+// bar, 자동완성, iOS 버전에 따른 visual viewport 동작 차이에 영향받지 않음.
+function setupPromptFocusFloat() {
+  if (!promptInput) return;
+  promptInput.addEventListener('focus', () => {
+    document.body.dataset.promptFocused = '1';
+  });
+  promptInput.addEventListener('blur', () => {
+    delete document.body.dataset.promptFocused;
+  });
 }
 
 buildMap();
@@ -1261,7 +1243,7 @@ setupSidebarResizer();
 setupMobileSidebar();
 setupDpad();
 setupActionPad();
-setupVisualViewport();
+setupPromptFocusFloat();
 recomputeMapViewport();
 new ResizeObserver(() => recomputeMapViewport()).observe(document.getElementById('sidebar'));
 setMode('typing');
