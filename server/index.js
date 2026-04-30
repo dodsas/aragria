@@ -81,14 +81,14 @@ wss.on('connection', (socket, req) => {
   const player = game.attachPlayer(socket, sid);
   if (!player) return; // duplicate active session — game already closed the socket
 
-  socket.on('message', (data) => {
+  socket.on('message', async (data) => {
     let msg;
     try { msg = JSON.parse(data); } catch { return; }
     try {
       if (msg?.type === 'cmd' && typeof msg.input === 'string') {
         game.handleCommand(player, msg.input);
       } else if (msg?.type === 'register' && typeof msg.name === 'string' && typeof msg.description === 'string') {
-        game.registerPlayer(player, msg.name, msg.description);
+        await game.registerPlayer(player, msg.name, msg.description);
       }
     } catch (err) {
       console.error('message error', err);

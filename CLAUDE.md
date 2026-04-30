@@ -58,6 +58,7 @@ The server is unaware of modes — WASD is a thin client wrapper that emits the 
 - `monster.md` — monster definition schema, tier system, and respawn rules.
 - `command.md` — server-authoritative input rate limits (attack cooldown, etc.).
 - `zone.md` — zone module schema (rooms/objects/spawns), loader contract, how to add new zones.
+- `llm.md` — LLM dispatcher / provider matrix, env vars, how to add a new per-situation generator.
 
 ### Commands
 

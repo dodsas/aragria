@@ -496,6 +496,7 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
   justify-content: center;
   backdrop-filter: blur(4px);
 }
+#welcome-overlay[hidden] { display: none; }
 #welcome-card {
   width: min(440px, 92vw);
   background: #1a1f28;
@@ -570,4 +571,9 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
   border-radius: 4px;
   color: #e8a0a0;
   font-size: 0.85rem;
+}
+.welcome-error.welcome-info {
+  background: rgba(70, 140, 200, 0.18);
+  border-color: rgba(70, 140, 200, 0.4);
+  color: #b8d4ec;
 }

@@ -176,6 +176,12 @@ export class Game {
           if (existing.spriteSvg) {
             this.send(existing, { type: 'character_sprite', playerId: existing.id, svg: existing.spriteSvg });
           }
+        } else if (existing.generating) {
+          // Stub mid-sprite-generation. Don't reset the modal back to the
+          // form — the in-flight generation is still running and a fresh
+          // `register` would hit the re-entry guard. Re-show the progress UI
+          // so the reloaded client knows we're still working.
+          this.send(existing, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
         } else {
           // Stub player resumed before completing registration — re-prompt.
           this.send(existing, { type: 'welcome' });
@@ -264,6 +270,10 @@ export class Game {
       // if the grace window expires without a reconnect.
       disconnectedAt: null,
       graceTimer: null,
+      // True while the per-character sprite is being generated as part of
+      // registration. Blocks re-entry of registerPlayer and lets attachPlayer
+      // resume the progress UI after a mid-generation reload.
+      generating: false,
     };
     this.players.set(id, player);
     if (sid) this.sidToPlayer.set(sid, player);
@@ -272,32 +282,66 @@ export class Game {
     return player;
   }
 
-  // Promote a stub player to a fully registered character. After this they
-  // appear in the square and can issue commands. Sprite generation is fired
-  // off in the background — players don't wait for it; combat falls back to
-  // the default sprite until the API call returns.
-  registerPlayer(player, name, description) {
+  // Promote a stub player to a fully registered character. Sprite generation
+  // runs inline (await) before the player enters the world — first combat
+  // would otherwise render the default sprite for ~30s and then visibly swap
+  // when the AI call returned. The wait is surfaced via `register_progress`
+  // so the welcome modal can show a "drawing" state instead of looking frozen.
+  async registerPlayer(player, name, description) {
     if (player.registered) return;
+    // Single-flight: while one register is mid-await, drop additional ones.
+    // Resend the progress UI so a reloaded client doesn't think the second
+    // press did nothing.
+    if (player.generating) {
+      this.send(player, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
+      return;
+    }
 
     const cleanName = String(name ?? '').slice(0, NAME_MAX_LEN).trim();
     const cleanDesc = String(description ?? '').slice(0, DESC_MAX_LEN).trim();
+    // Validation failures used to send `system` + `welcome` — but `system`
+    // landed in the log behind the modal (invisible) and `welcome` re-rendered
+    // the modal with the error area hidden. The user saw the button re-enable
+    // and nothing else. `register_error` keeps the modal up and surfaces the
+    // reason inline.
     if (cleanName.length < NAME_MIN_LEN || cleanDesc.length < DESC_MIN_LEN) {
-      this.send(player, { type: 'system', text: `이름은 ${NAME_MIN_LEN}~${NAME_MAX_LEN}자, 특징은 ${DESC_MIN_LEN}~${DESC_MAX_LEN}자로 입력하세요.` });
-      this.send(player, { type: 'welcome' });
+      this.send(player, { type: 'register_error', text: `이름은 ${NAME_MIN_LEN}~${NAME_MAX_LEN}자, 특징은 ${DESC_MIN_LEN}~${DESC_MAX_LEN}자로 입력하세요.` });
       return;
     }
     // Reject duplicate live names so attack/look targeting (exact-match) stays
-    // unambiguous. Skip the comparing player itself.
+    // unambiguous. Also reject names already reserved by another stub mid-
+    // generation, otherwise two parallel registers race and the loser fails
+    // ~30s later after the user has stared at a progress spinner.
     for (const p of this.players.values()) {
-      if (p.id !== player.id && p.registered && p.name === cleanName) {
-        this.send(player, { type: 'system', text: '같은 이름의 모험가가 이미 있습니다.' });
-        this.send(player, { type: 'welcome' });
+      if (p.id === player.id) continue;
+      if (p.name !== cleanName) continue;
+      if (p.registered || p.generating) {
+        this.send(player, { type: 'register_error', text: '같은 이름의 모험가가 이미 있습니다.' });
         return;
       }
     }
 
+    // Reserve the name on the stub before yielding so concurrent registrations
+    // from other players see the slot occupied during sprite generation.
     player.name = cleanName;
     player.description = cleanDesc;
+    player.generating = true;
+    this.send(player, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
+
+    let svg = null;
+    try {
+      svg = await generateCharacterSprite(cleanName, cleanDesc);
+    } finally {
+      player.generating = false;
+    }
+
+    // Player may have disconnected/finalized while we awaited. Stubs are
+    // dropped immediately on socket close (no grace), so the typical case is
+    // `players.has(id) === false` here and we abort silently.
+    if (!this.players.has(player.id)) return;
+    if (player.registered) return;
+
+    player.spriteSvg = svg; // null is fine — client falls back to default.
     player.registered = true;
     player.roomId = 'square';
 
@@ -305,27 +349,11 @@ export class Game {
     this.pushStatus(player);
     this.describeRoom(player);
     this.broadcastRoom(player.roomId, { type: 'text', text: `${cleanName}님이 이곳에 도착했습니다.` }, player.id);
+    // Cache own sprite client-side. _sendRoomSprites broadcasts to roommates
+    // but skips the arriver, so we send self here so PLAYER_SPRITES on the
+    // client is keyed by the player's own id for combat-panel lookup.
+    if (svg) this.send(player, { type: 'character_sprite', playerId: player.id, svg });
     this._sendRoomSprites(player);
-
-    this._generateSpriteFor(player);
-  }
-
-  // Background-generates the per-character SVG via the sprite module. On
-  // success, caches on the player and pushes to everyone currently in the
-  // same room (so combat panels can render it). Pure side-effect — never
-  // throws, never blocks the caller.
-  async _generateSpriteFor(player) {
-    const svg = await generateCharacterSprite(player.name, player.description);
-    if (!svg) return;
-    // Player may have disconnected/finalized while we awaited; guard.
-    if (!this.players.has(player.id)) return;
-    player.spriteSvg = svg;
-    const msg = { type: 'character_sprite', playerId: player.id, svg };
-    for (const p of this.players.values()) {
-      if (!p.registered) continue;
-      if (p.roomId !== player.roomId) continue;
-      this.send(p, msg);
-    }
   }
 
   // Final removal after grace expires (or on respawn-driven cleanup). Same
@@ -594,10 +622,9 @@ export class Game {
 
   // On room entry, push the cached sprite of every other registered player
   // currently in the room so the arriving client can render them in combat.
-  // Mirror direction (existing → new room): not needed here — when this
-  // player generated their sprite, _generateSpriteFor already broadcast it
-  // to everyone in their then-current room; subsequent room changes
-  // broadcast on entry via this method.
+  // Also push the arriver's sprite to those roommates so they see this
+  // player in combat. Self-cache is handled by registerPlayer (which sends
+  // own sprite directly to the player) since this method skips the arriver.
   _sendRoomSprites(arriver) {
     if (!arriver.registered) return;
     // Send arriver's sprite to room mates (so they see this player in combat).

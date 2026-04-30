@@ -114,6 +114,8 @@ function handleMessage(msg) {
     case 'view':    renderObjectView(msg.view); break;
     case 'combat':  renderCombat(msg.combat); break;
     case 'welcome': showWelcome(); break;
+    case 'register_progress': showRegisterProgress(msg.text || '캐릭터를 그리는 중입니다…'); break;
+    case 'register_error': showRegisterError(msg.text || '등록할 수 없습니다.'); break;
     case 'character_sprite':
       if (msg.svg && typeof msg.playerId === 'number') {
         PLAYER_SPRITES.set(msg.playerId, msg.svg);
@@ -126,7 +128,10 @@ function showWelcome() {
   if (!welcomeOverlay) return;
   welcomeOverlay.hidden = false;
   if (welcomeButton) welcomeButton.disabled = false;
-  if (welcomeError) welcomeError.hidden = true;
+  if (welcomeError) {
+    welcomeError.classList.remove('welcome-info');
+    welcomeError.hidden = true;
+  }
   // Defer focus until after the show transition; iOS Safari ignores focus()
   // on a just-unhidden element otherwise.
   setTimeout(() => welcomeName?.focus(), 50);
@@ -134,6 +139,36 @@ function showWelcome() {
 function hideWelcome() {
   if (!welcomeOverlay) return;
   welcomeOverlay.hidden = true;
+}
+
+// Server rejected the registration. Keep the modal up, re-enable submit, and
+// surface the reason inline (otherwise the user just sees the button re-enable
+// with no clue why). Distinct from showWelcome so we don't wipe the error the
+// way a fresh prompt does.
+function showRegisterError(text) {
+  if (!welcomeOverlay) return;
+  welcomeOverlay.hidden = false;
+  if (welcomeButton) welcomeButton.disabled = false;
+  if (welcomeError) {
+    welcomeError.classList.remove('welcome-info');
+    welcomeError.textContent = text;
+    welcomeError.hidden = false;
+  }
+}
+
+// Server is generating the per-character sprite (~30s). Keep the modal up
+// with the button disabled and switch the feedback row into an info-styled
+// progress message — without this the user sees a frozen disabled button
+// for the entire AI call and assumes the page hung.
+function showRegisterProgress(text) {
+  if (!welcomeOverlay) return;
+  welcomeOverlay.hidden = false;
+  if (welcomeButton) welcomeButton.disabled = true;
+  if (welcomeError) {
+    welcomeError.classList.add('welcome-info');
+    welcomeError.textContent = text;
+    welcomeError.hidden = false;
+  }
 }
 
 if (welcomeForm) {
@@ -148,10 +183,14 @@ if (welcomeForm) {
       }
       return;
     }
-    if (welcomeButton) welcomeButton.disabled = true;
-    if (welcomeError) welcomeError.hidden = true;
     if (ws && ws.readyState === WebSocket.OPEN) {
+      if (welcomeButton) welcomeButton.disabled = true;
+      if (welcomeError) welcomeError.hidden = true;
       ws.send(JSON.stringify({ type: 'register', name, description }));
+    } else {
+      // Without this branch the button would stay disabled forever after a
+      // dropped connection and the user has no recovery path.
+      showRegisterError('서버 연결이 끊어졌습니다. 잠시 후 다시 시도하세요.');
     }
   });
 }
