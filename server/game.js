@@ -97,11 +97,13 @@ const ROOMS = {
 const MONSTER_DEFS = {
   goblin: {
     name: '고블린',
+    icon: '👹',
     desc: '작고 교활한 눈빛의 녹색 생명체. 녹슨 단검을 들고 있다.',
     hp: 20, maxHp: 20, atk: 5,
   },
   skeleton: {
     name: '해골 전사',
+    icon: '💀',
     desc: '낡은 갑옷을 입은 뼈만 남은 전사. 텅 빈 눈구멍에서 붉은 빛이 흔들린다.',
     hp: 35, maxHp: 35, atk: 8,
   },
@@ -110,7 +112,7 @@ const MONSTER_DEFS = {
 let nextMonsterId = 1;
 function spawnMonster(defId) {
   const def = MONSTER_DEFS[defId];
-  return { id: nextMonsterId++, defId, name: def.name, hp: def.hp, maxHp: def.maxHp, atk: def.atk };
+  return { id: nextMonsterId++, defId, name: def.name, icon: def.icon, hp: def.hp, maxHp: def.maxHp, atk: def.atk };
 }
 
 // Objects with `view` get UI rendering on `look`. Without `view`, prose only.
@@ -251,6 +253,7 @@ export class Game {
       roomId: 'square',
       hp: 100,
       maxHp: 100,
+      icon: '🧙',
       equipment: STARTING_EQUIPMENT(),
       inventory: STARTING_INVENTORY(),
     };
@@ -372,6 +375,7 @@ export class Game {
     this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 ${d} 방향으로 떠났습니다.` }, player.id);
     player.roomId = next;
     this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 도착했습니다.` }, player.id);
+    this.clearCombat(player);
     this.pushStatus(player);
     this.describeRoom(player);
   }
@@ -425,6 +429,7 @@ export class Game {
       const list = this.roomMonsters.get(player.roomId);
       list.splice(list.indexOf(target), 1);
       this.seg(player, [{ text: target.name, cls: 'monster-name' }, { text: '이(가) 쓰러졌다!' }]);
+      this.pushCombat(player, target, 'monster');
       return;
     }
 
@@ -437,6 +442,7 @@ export class Game {
 
     if (player.hp <= 0) {
       this.send(player, { type: 'system', text: '의식을 잃고 쓰러졌다...' });
+      this.pushCombat(player, target, 'player');
       player.hp = Math.floor(player.maxHp * 0.3);
       player.roomId = 'square';
       this.pushStatus(player);
@@ -444,6 +450,7 @@ export class Game {
       this.describeRoom(player);
       return;
     }
+    this.pushCombat(player, target);
     this.pushStatus(player);
   }
 
@@ -481,5 +488,20 @@ export class Game {
         inventory: player.inventory,
       },
     });
+  }
+
+  pushCombat(player, monster, fallen = null) {
+    this.send(player, {
+      type: 'combat',
+      combat: {
+        player: { name: player.name, icon: player.icon, hp: Math.max(0, player.hp), maxHp: player.maxHp },
+        monster: { name: monster.name, icon: monster.icon, hp: Math.max(0, monster.hp), maxHp: monster.maxHp },
+        fallen, // 'monster' | 'player' | null
+      },
+    });
+  }
+
+  clearCombat(player) {
+    this.send(player, { type: 'combat', combat: null });
   }
 }

@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm start *)",
       "Bash(pkill -f \"node server/index.js\")",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Skill(update-config)"
     ]
   }
 }

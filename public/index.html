@@ -8,6 +8,8 @@
 </head>
 <body>
   <main id="app">
+    <button id="sidebar-toggle" type="button" aria-label="사이드바 열기/닫기" aria-expanded="false">☰</button>
+    <div id="sidebar-backdrop" hidden></div>
     <aside id="sidebar">
       <header id="status-header">
         <span id="status-name">접속 중...</span>
@@ -30,6 +32,7 @@
     </aside>
     <div id="sidebar-resizer" role="separator" aria-orientation="vertical" title="드래그하여 사이드바 크기 조절"></div>
     <section id="viewport">
+      <div id="combat-view" hidden></div>
       <div id="log" aria-live="polite"></div>
       <div id="object-view" hidden></div>
       <form id="prompt-form" autocomplete="off">

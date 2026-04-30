@@ -5,7 +5,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "stop": "pkill -f 'node server/index.js' || true",
+    "restart": "npm run stop && sleep 0.5 && npm start"
   },
   "keywords": [],
   "author": "",

@@ -1,5 +1,6 @@
 const logEl = document.getElementById('log');
 const objectViewEl = document.getElementById('object-view');
+const combatViewEl = document.getElementById('combat-view');
 const promptForm = document.getElementById('prompt-form');
 const promptInput = document.getElementById('prompt');
 const equipmentEl = document.getElementById('equipment');
@@ -52,7 +53,104 @@ function handleMessage(msg) {
     case 'system': appendLine(msg.text, 'line system'); break;
     case 'status': renderStatus(msg.status); break;
     case 'view':   renderObjectView(msg.view); break;
+    case 'combat': renderCombat(msg.combat); break;
   }
+}
+
+let combatDismissTimer = null;
+function renderCombat(combat) {
+  if (combatDismissTimer) {
+    clearTimeout(combatDismissTimer);
+    combatDismissTimer = null;
+  }
+  if (!combat) {
+    combatViewEl.hidden = true;
+    combatViewEl.innerHTML = '';
+    combatViewEl.classList.remove('fading');
+    return;
+  }
+  combatViewEl.hidden = false;
+  combatViewEl.innerHTML = '';
+  combatViewEl.classList.remove('fading');
+
+  const fallen = combat.fallen || null;
+  const sideMe = makeCombatSide(combat.player, false, fallen === 'player');
+  const sideFoe = makeCombatSide(combat.monster, true, fallen === 'monster');
+  const vs = document.createElement('div');
+  vs.className = 'cv-vs';
+  vs.textContent = fallen ? '💥' : 'VS';
+
+  combatViewEl.appendChild(sideMe);
+  combatViewEl.appendChild(vs);
+  combatViewEl.appendChild(sideFoe);
+
+  if (fallen) {
+    // Linger for a beat so the player sees the defeat, then fade out.
+    combatDismissTimer = setTimeout(() => {
+      combatViewEl.classList.add('fading');
+      combatDismissTimer = setTimeout(() => renderCombat(null), 400);
+    }, 1800);
+  }
+}
+
+function makeCombatSide(actor, isFoe, isFallen) {
+  const root = document.createElement('div');
+  root.className = 'cv-side' + (isFoe ? ' cv-foe' : '') + (isFallen ? ' cv-fallen' : '');
+
+  const icon = document.createElement('div');
+  icon.className = 'cv-icon';
+  icon.textContent = isFallen ? '✝' : (actor.icon || (isFoe ? '👾' : '🧙'));
+
+  const info = document.createElement('div');
+  info.className = 'cv-info';
+  const name = document.createElement('div');
+  name.className = 'cv-name';
+  name.textContent = actor.name || '?';
+  const track = document.createElement('div');
+  track.className = 'cv-hp-track';
+  const fill = document.createElement('div');
+  const max = actor.maxHp || 1;
+  const pct = Math.max(0, Math.min(100, (actor.hp / max) * 100));
+  fill.className = 'cv-hp-fill' + (pct < 25 ? ' crit' : pct < 50 ? ' low' : '');
+  fill.style.width = `${pct}%`;
+  track.appendChild(fill);
+  const num = document.createElement('div');
+  num.className = 'cv-hp-num';
+  num.textContent = `HP ${actor.hp}/${actor.maxHp}`;
+
+  info.appendChild(name);
+  info.appendChild(track);
+  info.appendChild(num);
+
+  if (isFoe) {
+    root.appendChild(info);
+    root.appendChild(icon);
+  } else {
+    root.appendChild(icon);
+    root.appendChild(info);
+  }
+  return root;
+}
+
+const escapeHtml = (s) => s
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;');
+
+function highlightText(raw) {
+  // Order matters: run quote-wrapping FIRST (before any <span ...> tags exist),
+  // otherwise the regex catches attribute quotes like class="tx-room".
+  let out = escapeHtml(raw);
+  out = out.replace(/("[^"\n]+")/g, '\x00QSTART\x00$1\x00QEND\x00');
+  out = out.replace(/(──\s+[^─\n]+?\s+──)/g, '<span class="tx-room">$1</span>');
+  out = out.replace(/(보이는 것|출구|이곳에 있는 사람|적|체력|명령)(:)/g, '<span class="tx-label">$1</span>$2');
+  out = out.replace(/(\d+)(\s*\/\s*)(\d+)/g, '<span class="tx-hp">$1$2$3</span>');
+  out = out.replace(/(\d+)(의\s*피해)/g, '<span class="tx-dmg">$1</span>$2');
+  out = out.replace(/\b(north|south|east|west)\b/gi, '<span class="tx-dir">$1</span>');
+  out = out.replace(/(북쪽|남쪽|동쪽|서쪽)/g, '<span class="tx-dir">$1</span>');
+  out = out.replace(/(여행자\d+)/g, '<span class="tx-player">$1</span>');
+  out = out.replaceAll('\x00QSTART\x00', '<span class="tx-quote">').replaceAll('\x00QEND\x00', '</span>');
+  return out;
 }
 
 function appendLine(content, cls = 'line') {
@@ -61,12 +159,19 @@ function appendLine(content, cls = 'line') {
   if (Array.isArray(content)) {
     for (const seg of content) {
       const span = document.createElement('span');
-      span.textContent = seg.text;
       if (seg.cls) span.className = seg.cls;
+      // Highlight inside un-classed segments too so HP/damage numbers pop.
+      if (!seg.cls) {
+        span.innerHTML = highlightText(seg.text);
+      } else {
+        span.textContent = seg.text;
+      }
       div.appendChild(span);
     }
-  } else {
+  } else if (cls.includes('echo') || cls.includes('error')) {
     div.textContent = content;
+  } else {
+    div.innerHTML = highlightText(content);
   }
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
@@ -466,32 +571,45 @@ function recomputeMapViewport() {
 function setupSidebarResizer() {
   const resizer = document.getElementById('sidebar-resizer');
   const app = document.getElementById('app');
-  if (!resizer || !app) return;
+  const sidebar = document.getElementById('sidebar');
+  if (!resizer || !app || !sidebar) return;
 
-  let dragging = false, startX = 0, startW = 0;
   const RESIZER_W = 6;
   const MIN_SIDEBAR = 200;
   const MIN_VIEWPORT = 240;
+  const STORAGE_KEY = 'aragria.sidebarWidth';
 
+  const clampW = (w) => {
+    const maxW = window.innerWidth - MIN_VIEWPORT - RESIZER_W;
+    return Math.max(MIN_SIDEBAR, Math.min(maxW, w));
+  };
+  const applyW = (w) => {
+    app.style.gridTemplateColumns = `${clampW(w)}px ${RESIZER_W}px 1fr`;
+  };
+
+  const saved = Number(localStorage.getItem(STORAGE_KEY));
+  if (Number.isFinite(saved) && saved > 0) applyW(saved);
+
+  let dragging = false, startX = 0, startW = 0;
   resizer.addEventListener('pointerdown', (e) => {
     dragging = true;
     startX = e.clientX;
-    startW = document.getElementById('sidebar').getBoundingClientRect().width;
+    startW = sidebar.getBoundingClientRect().width;
     resizer.setPointerCapture(e.pointerId);
     resizer.classList.add('dragging');
   });
   resizer.addEventListener('pointermove', (e) => {
     if (!dragging) return;
-    const dx = e.clientX - startX;
-    const maxW = window.innerWidth - MIN_VIEWPORT - RESIZER_W;
-    const newW = Math.max(MIN_SIDEBAR, Math.min(maxW, startW + dx));
-    app.style.gridTemplateColumns = `${newW}px ${RESIZER_W}px 1fr`;
+    applyW(startW + (e.clientX - startX));
   });
   const stop = (e) => {
     if (!dragging) return;
     dragging = false;
     if (e.pointerId != null) resizer.releasePointerCapture(e.pointerId);
     resizer.classList.remove('dragging');
+    try {
+      localStorage.setItem(STORAGE_KEY, String(Math.round(sidebar.getBoundingClientRect().width)));
+    } catch {}
   };
   resizer.addEventListener('pointerup', stop);
   resizer.addEventListener('pointercancel', stop);
@@ -506,8 +624,22 @@ inventoryEl.addEventListener('click', (e) => {
   sendCmd(`use ${id}`);
 });
 
+function setupMobileSidebar() {
+  const toggle = document.getElementById('sidebar-toggle');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  if (!toggle || !backdrop) return;
+  const setOpen = (open) => {
+    document.body.dataset.sidebar = open ? 'open' : '';
+    toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    backdrop.hidden = !open;
+  };
+  toggle.addEventListener('click', () => setOpen(document.body.dataset.sidebar !== 'open'));
+  backdrop.addEventListener('click', () => setOpen(false));
+}
+
 buildMap();
 setupSidebarResizer();
+setupMobileSidebar();
 recomputeMapViewport();
 new ResizeObserver(() => recomputeMapViewport()).observe(document.getElementById('sidebar'));
 setMode('typing');
