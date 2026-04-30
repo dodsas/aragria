@@ -149,11 +149,12 @@ export class Game {
     }
   }
 
-  // 같은 방의 모든 플레이어(교전·비교전 무관)에게 현재 룸 몬스터 스냅샷을
-  // 보낸다. 클라이언트는 이 메시지로 대기화면(=비전투)에서도 몬스터 HP 바를
-  // 갱신한다. dead 플래그가 선 항목은 곧 splice될 예정이라 제외해 패널이
-  // 깜빡이지 않도록 한다.
-  _pushRoomMonsters(roomId) {
+  // 같은 방의 모든 플레이어(교전·비교전 무관)에게 현재 룸 스냅샷을 보낸다.
+  // monsters는 HP 바 갱신용, objects/players는 모바일 액션 패드의 대상 선택
+  // 서브메뉴 채우기용. dead 플래그가 선 항목은 splice 예정이라 제외해 패널이
+  // 깜빡이지 않도록 하고, players는 수신자별로 self를 제외해 자기 자신을
+  // "봐" 대상에서 제외한다.
+  _buildRoomPayload(roomId, forPlayerId) {
     const list = this.roomMonsters.get(roomId) || [];
     const monsters = [];
     for (const m of list) {
@@ -163,7 +164,25 @@ export class Game {
         hp: Math.max(0, m.hp), maxHp: m.maxHp,
       });
     }
-    this.broadcastRoom(roomId, { type: 'room_monsters', roomId, monsters });
+    const room = ROOMS[roomId];
+    const objects = (room?.objects || [])
+      .map(id => ({ id, name: OBJECTS[id]?.name }))
+      .filter(o => o.name);
+    const players = [];
+    for (const o of this.players.values()) {
+      if (o.id === forPlayerId) continue;
+      if (!o.registered || o.disconnectedAt != null) continue;
+      if (o.roomId !== roomId) continue;
+      players.push({ id: o.id, name: o.name });
+    }
+    return { type: 'room_monsters', roomId, monsters, objects, players };
+  }
+
+  _pushRoomMonsters(roomId) {
+    for (const p of this.players.values()) {
+      if (p.roomId !== roomId || !p.registered || p.disconnectedAt != null) continue;
+      this.send(p, this._buildRoomPayload(roomId, p.id));
+    }
   }
 
   _spawnMonsters() {
@@ -467,6 +486,7 @@ export class Game {
     this.pushStatus(player);
     this.describeRoom(player);
     this.broadcastRoom(player.roomId, { type: 'text', text: `${cleanName}님이 이곳에 도착했습니다.` }, player.id);
+    this._pushRoomMonsters(player.roomId);
     // Cache own sprite client-side. _sendRoomSprites broadcasts to roommates
     // but skips the arriver, so we send self here so PLAYER_SPRITES on the
     // client is keyed by the player's own id for combat-panel lookup.
@@ -485,6 +505,7 @@ export class Game {
     if (p.sid) this.sidToPlayer.delete(p.sid);
     this._clearKillStealBlocksAgainst(id, fromRoom);
     this.broadcastRoom(fromRoom, { type: 'text', text: `${p.name}님이 떠났습니다.` });
+    this._pushRoomMonsters(fromRoom);
   }
 
   // Kill-steal block (see _attackMonster) is anchored to the victim's presence
@@ -584,12 +605,9 @@ export class Game {
     if (others) this.send(player, { type: 'text', text: `이곳에 있는 사람: ${others}` });
     this.send(player, { type: 'text', text: `출구: ${exits}` });
     this.send(player, { type: 'view', view: null });
-    // 대기화면 룸 몬스터 패널을 즉시 채운다. 이전 방의 잔존 항목이 있어도
-    // 새 룸 스냅샷(빈 배열일 수 있음)으로 덮어써 깨끗하게 갱신.
-    const roomMonsterList = (this.roomMonsters.get(room.id) || [])
-      .filter(m => !m.dead)
-      .map(m => ({ id: m.id, defId: m.defId, name: m.name, icon: m.icon, hp: Math.max(0, m.hp), maxHp: m.maxHp }));
-    this.send(player, { type: 'room_monsters', roomId: room.id, monsters: roomMonsterList });
+    // 대기화면 룸 스냅샷을 즉시 채운다. 이전 방의 잔존 항목이 있어도 새 룸
+    // 스냅샷(빈 배열일 수 있음)으로 덮어써 깨끗하게 갱신.
+    this.send(player, this._buildRoomPayload(room.id, player.id));
   }
 
   // Resolution order: self-shortcuts → room objects → monsters → players in
@@ -726,6 +744,7 @@ export class Game {
       return;
     }
     player.lastMoveAt = Date.now();
+    const fromRoom = player.roomId;
     // Anyone holding a kill-steal block against this player loses the gate the
     // moment we leave the disputed room. Push-clear before we change roomId so
     // the helper can match on the (still-current) from-room.
@@ -744,6 +763,10 @@ export class Game {
     this.pushStatus(player);
     this.describeRoom(player);
     this._sendRoomSprites(player);
+    // Refresh both rooms' player rosters so other clients' action-pad targets
+    // (and "사람" lists) reflect the move without waiting for a stray event.
+    this._pushRoomMonsters(fromRoom);
+    this._pushRoomMonsters(player.roomId);
   }
 
   // On room entry, push the cached sprite of every other registered player
@@ -1068,11 +1091,13 @@ export class Game {
       // player's presence in fromRoom can move freely now.
       this._clearKillStealBlocksAgainst(player.id, fromRoom);
       this.broadcastRoom(fromRoom, { type: 'text', text: `${player.name}님이 사라졌다.` });
+      this._pushRoomMonsters(fromRoom);
     }
     this.pushStatus(player);
     this.send(player, { type: 'system', text: '정신을 차려보니 광장이다. 체력이 조금 회복됐다.' });
     this.describeRoom(player);
     this.broadcastRoom('square', { type: 'text', text: `${player.name}님이 비틀거리며 나타났다.` }, player.id);
+    this._pushRoomMonsters('square');
   }
 
   say(player, text) {

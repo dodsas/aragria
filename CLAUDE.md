@@ -59,6 +59,7 @@ The server is unaware of modes — WASD is a thin client wrapper that emits the 
 - `command.md` — server-authoritative input rate limits (attack cooldown, etc.).
 - `zone.md` — zone module schema (rooms/objects/spawns), loader contract, how to add new zones.
 - `llm.md` — LLM dispatcher / provider matrix, env vars, how to add a new per-situation generator.
+- `touch_controls.md` — 모바일 하단 d-pad + 계층형 액션 패드(공격/봐 → 타깃 선택), `room_monsters` 페이로드 확장.
 
 ### Commands
 

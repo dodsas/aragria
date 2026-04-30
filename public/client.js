@@ -114,7 +114,7 @@ function handleMessage(msg) {
     case 'status':  renderStatus(msg.status); hideWelcome(); break;
     case 'view':    renderObjectView(msg.view); break;
     case 'combat':  renderCombat(msg.combat); break;
-    case 'room_monsters': renderRoomMonsters(msg.monsters || []); break;
+    case 'room_monsters': renderRoomMonsters(msg); break;
     case 'welcome': showWelcome(); break;
     case 'register_progress': showRegisterProgress(msg.text || '캐릭터를 그리는 중입니다…'); break;
     case 'register_error': showRegisterError(msg.text || '등록할 수 없습니다.'); break;
@@ -266,12 +266,19 @@ function renderCombat(combat) {
   }
 }
 
-// 룸 몬스터 라이브 HP 패널. 서버의 `room_monsters` 메시지로 갱신되며, 같은
-// 방의 모든 플레이어가(전투 중이든 아니든) 동일한 HP 값을 본다. 자가 회복
-// 틱이 일어나면 HP 바가 다시 차오르고, 공격이 들어오면 즉시 줄어든다.
-function renderRoomMonsters(monsters) {
+// 룸 몬스터 라이브 HP 패널 + 액션 패드 타깃 소스. 서버 `room_monsters`는
+// monsters/objects/players 세 리스트를 함께 싣고 들어온다 — HP 바는 monsters
+// 만 쓰고, 액션 패드는 셋 모두를 모바일 서브메뉴에 채운다.
+function renderRoomMonsters(msg) {
+  const monsters = msg?.monsters || [];
+  currentRoomTargets = {
+    monsters: monsters.map(m => ({ id: m.id, name: m.name })),
+    objects: msg?.objects || [],
+    players: msg?.players || [],
+  };
+  renderActionPad();
   if (!roomMonstersEl) return;
-  if (!inCombat || !monsters || monsters.length === 0) {
+  if (!inCombat || monsters.length === 0) {
     roomMonstersEl.hidden = true;
     roomMonstersEl.innerHTML = '';
     return;
@@ -1138,6 +1145,99 @@ inventoryEl.addEventListener('click', (e) => {
   sendCmd(`use ${id}`);
 });
 
+function setupDpad() {
+  const dpad = document.getElementById('dpad');
+  if (!dpad) return;
+  dpad.addEventListener('click', (e) => {
+    const btn = e.target.closest('.dpad-btn');
+    if (!btn) return;
+    const dir = btn.dataset.dir;
+    if (!dir) return;
+    appendLine(`> [이동] ${dir}`, 'line echo');
+    sendCmd(`go ${dir}`);
+  });
+}
+
+// Hierarchical action pad. Root level shows category buttons (공격 / 봐) only
+// for categories with at least one valid target in the current room. Tapping
+// a category descends into a target list rendered from server-pushed
+// room_monsters payload (monsters/objects/players). Tapping a target sends
+// `<verb> <name>` and returns to root. A back button (↩) at the bottom of
+// any sub-level returns to root without firing a command.
+let currentRoomTargets = { monsters: [], objects: [], players: [] };
+let actionPadLevel = 'root'; // 'root' | 'attack' | 'look'
+
+function attackableTargets() {
+  // Players are technically valid attack targets server-side, but we
+  // intentionally don't surface them in the touch UI to avoid one-tap PvP.
+  return currentRoomTargets.monsters || [];
+}
+
+function lookableTargets() {
+  return [
+    ...(currentRoomTargets.monsters || []),
+    ...(currentRoomTargets.objects || []),
+    ...(currentRoomTargets.players || []),
+  ];
+}
+
+function makeActionBtn(label, cls, onClick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'action-btn' + (cls ? ' ' + cls : '');
+  btn.textContent = label;
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+function renderActionPad() {
+  const pad = document.getElementById('action-pad');
+  if (!pad) return;
+  pad.innerHTML = '';
+  // If current sub-level lost all its targets (last monster died, etc.),
+  // gracefully fall back to root rather than rendering an empty pane.
+  if (actionPadLevel === 'attack' && attackableTargets().length === 0) actionPadLevel = 'root';
+  if (actionPadLevel === 'look' && lookableTargets().length === 0) actionPadLevel = 'root';
+
+  if (actionPadLevel === 'root') {
+    if (attackableTargets().length > 0) {
+      pad.appendChild(makeActionBtn('공격', 'action-cat', () => {
+        actionPadLevel = 'attack';
+        renderActionPad();
+      }));
+    }
+    if (lookableTargets().length > 0) {
+      pad.appendChild(makeActionBtn('봐', 'action-cat', () => {
+        actionPadLevel = 'look';
+        renderActionPad();
+      }));
+    }
+    return;
+  }
+
+  const targets = actionPadLevel === 'attack' ? attackableTargets() : lookableTargets();
+  const verbLabel = actionPadLevel === 'attack' ? '공격' : '봐';
+  const verbCmd = actionPadLevel === 'attack' ? 'attack' : 'look';
+  for (const t of targets) {
+    pad.appendChild(makeActionBtn(t.name, 'action-target', () => {
+      appendLine(`> ${verbLabel} ${t.name}`, 'line echo');
+      sendCmd(`${verbCmd} ${t.name}`);
+      actionPadLevel = 'root';
+      renderActionPad();
+    }));
+  }
+  pad.appendChild(makeActionBtn('↩', 'action-back', () => {
+    actionPadLevel = 'root';
+    renderActionPad();
+  }));
+}
+
+function setupActionPad() {
+  // Pad is rendered dynamically on every state change; nothing to do at init
+  // beyond clearing the static placeholder buttons declared in index.html.
+  renderActionPad();
+}
+
 function setupMobileSidebar() {
   const toggle = document.getElementById('sidebar-toggle');
   const backdrop = document.getElementById('sidebar-backdrop');
@@ -1154,6 +1254,8 @@ function setupMobileSidebar() {
 buildMap();
 setupSidebarResizer();
 setupMobileSidebar();
+setupDpad();
+setupActionPad();
 recomputeMapViewport();
 new ResizeObserver(() => recomputeMapViewport()).observe(document.getElementById('sidebar'));
 setMode('typing');

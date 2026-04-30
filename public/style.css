@@ -477,6 +477,9 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
 #conn-status.on { color: var(--ok); }
 #conn-status.off { color: var(--danger); }
 
+/* ── Mobile touch controls (hidden on desktop) ─────────── */
+#touch-controls { display: none; }
+
 /* ── Mobile sidebar toggle (hidden on desktop) ─────────── */
 #sidebar-toggle {
   display: none;
@@ -526,6 +529,68 @@ body[data-sidebar="open"] #sidebar-toggle::before { content: '‹'; }
   #sidebar-resizer { display: none; }
   #viewport { border-left: none; }
   #log { padding-left: 36px; }   /* leave room for the centered side toggle */
+  #touch-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 6px 16px 4px;
+    background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  #dpad {
+    display: grid;
+    grid-template-columns: repeat(3, 36px);
+    grid-template-rows: repeat(2, 30px);
+    gap: 4px;
+  }
+  #action-pad {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-end;
+    justify-content: flex-end;
+    gap: 4px;
+    max-width: calc(100% - 132px); /* leave room for the 3-col dpad on the left */
+    max-height: 64px;
+    overflow-y: auto;
+  }
+  .dpad-btn,
+  .action-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elev);
+    color: var(--accent);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    font-family: inherit;
+  }
+  .dpad-btn:active,
+  .action-btn:active { background: var(--accent-soft); color: var(--bg); }
+  .dpad-up    { grid-column: 2; grid-row: 1; }
+  .dpad-left  { grid-column: 1; grid-row: 2; }
+  .dpad-down  { grid-column: 2; grid-row: 2; }
+  .dpad-right { grid-column: 3; grid-row: 2; }
+  .action-btn {
+    min-width: 56px;
+    max-width: 130px;
+    height: 30px;
+    padding: 0 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .action-btn.action-cat { background: var(--accent-soft); color: var(--bg); border-color: var(--accent); }
+  .action-btn.action-back { background: transparent; color: var(--fg-dim); }
   #sidebar-toggle { display: inline-flex; }
   body[data-sidebar="open"] #sidebar-toggle {
     left: min(85vw, 340px);
