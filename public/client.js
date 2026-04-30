@@ -256,33 +256,54 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ── Map ─────────────────────────────────────────────────
-const ROOM_W = 60, ROOM_H = 22, COL_STEP = 96, ROW_STEP = 34, VIEWPORT_COLS = 3;
-// col/row: grid position. x/y: pixel position inside the scrollable inner container.
-const MAP_ROOMS = {
-  market:     { x:   0, y:  0, label: '시장',  col: 0 },
-  square:     { x:   0, y: 34, label: '광장',  col: 0 },
-  temple:     { x:  96, y: 34, label: '신전',  col: 1 },
-  forest_0_0: { x: 192, y:  34, label: '숲', cls: 'forest', col: 2 },
-  forest_1_0: { x: 288, y:  34, label: '숲', cls: 'forest', col: 3 },
-  forest_2_0: { x: 384, y:  34, label: '숲', cls: 'forest', col: 4 },
-  forest_0_1: { x: 192, y:  68, label: '숲', cls: 'forest', col: 2 },
-  forest_1_1: { x: 288, y:  68, label: '숲', cls: 'forest', col: 3 },
-  forest_2_1: { x: 384, y:  68, label: '숲', cls: 'forest', col: 4 },
-  forest_0_2: { x: 192, y: 102, label: '숲', cls: 'forest', col: 2 },
-  forest_1_2: { x: 288, y: 102, label: '숲', cls: 'forest', col: 3 },
-  forest_2_2: { x: 384, y: 102, label: '숲', cls: 'forest', col: 4 },
-};
-const MAP_CONNS = [
-  ['market',     'square'],
-  ['square',     'temple'],
-  ['temple',     'forest_0_0'],
-  ['forest_0_0', 'forest_1_0'], ['forest_1_0', 'forest_2_0'],
-  ['forest_0_1', 'forest_1_1'], ['forest_1_1', 'forest_2_1'],
-  ['forest_0_2', 'forest_1_2'], ['forest_1_2', 'forest_2_2'],
-  ['forest_0_0', 'forest_0_1'], ['forest_0_1', 'forest_0_2'],
-  ['forest_1_0', 'forest_1_1'], ['forest_1_1', 'forest_1_2'],
-  ['forest_2_0', 'forest_2_1'], ['forest_2_1', 'forest_2_2'],
-];
+const ROOM_W = 60, ROOM_H = 22, COL_STEP = 96, ROW_STEP = 34;
+const VIEWPORT_COLS = 4, VIEWPORT_ROWS = 4;
+const FOREST_SIZE = 5;
+
+// MAP_ROOMS holds (col,row) grid + (x,y) pixel position. The forest is a
+// FOREST_SIZE × FOREST_SIZE grid placed east of the temple (cols 2..2+SIZE-1,
+// rows 1..SIZE).
+function buildMapRooms() {
+  const rooms = {
+    market: { col: 0, row: 0, label: '시장' },
+    square: { col: 0, row: 1, label: '광장' },
+    temple: { col: 1, row: 1, label: '신전' },
+  };
+  for (let r = 0; r < FOREST_SIZE; r++) {
+    for (let c = 0; c < FOREST_SIZE; c++) {
+      rooms[`forest_${c}_${r}`] = {
+        col: 2 + c,
+        row: 1 + r,
+        label: '숲',
+        cls: 'forest',
+      };
+    }
+  }
+  for (const room of Object.values(rooms)) {
+    room.x = room.col * COL_STEP;
+    room.y = room.row * ROW_STEP;
+  }
+  return rooms;
+}
+
+function buildMapConns() {
+  const conns = [
+    ['market', 'square'],
+    ['square', 'temple'],
+    ['temple', 'forest_0_0'],
+  ];
+  for (let r = 0; r < FOREST_SIZE; r++) {
+    for (let c = 0; c < FOREST_SIZE; c++) {
+      const id = `forest_${c}_${r}`;
+      if (c < FOREST_SIZE - 1) conns.push([id, `forest_${c + 1}_${r}`]);
+      if (r < FOREST_SIZE - 1) conns.push([id, `forest_${c}_${r + 1}`]);
+    }
+  }
+  return conns;
+}
+
+const MAP_ROOMS = buildMapRooms();
+const MAP_CONNS = buildMapConns();
 
 function buildMap() {
   const canvas = document.getElementById('map-canvas');
@@ -291,9 +312,14 @@ function buildMap() {
   inner.id = 'map-inner';
   canvas.appendChild(inner);
 
+  let maxCol = 0, maxRow = 0;
+  for (const r of Object.values(MAP_ROOMS)) {
+    if (r.col > maxCol) maxCol = r.col;
+    if (r.row > maxRow) maxRow = r.row;
+  }
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('width', 5 * COL_STEP);
-  svg.setAttribute('height', 3 * ROW_STEP + ROOM_H);
+  svg.setAttribute('width', (maxCol + 1) * COL_STEP);
+  svg.setAttribute('height', maxRow * ROW_STEP + ROOM_H);
   svg.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none';
 
   for (const [a, b] of MAP_CONNS) {
@@ -331,7 +357,17 @@ function buildMap() {
 }
 
 let mapReady = false;
-let camCol = 0;
+let camCol = 0, camRow = 0;
+
+// Slide camera so that at least EDGE_BUFFER cells of context stay visible on
+// each side of the player. The camera only moves when the player crosses into
+// the buffer zone, so connection lines into the off-viewport rooms remain
+// partly drawn through that buffer (clipped by overflow:hidden).
+function panAxis(pos, cam, viewport, edge) {
+  if (pos >= cam + viewport - edge) cam = pos - viewport + 1 + edge;
+  else if (pos - edge < cam) cam = pos - edge;
+  return Math.max(0, cam);
+}
 
 function updateMapPlayer(roomId) {
   const room = MAP_ROOMS[roomId];
@@ -341,24 +377,21 @@ function updateMapPlayer(roomId) {
     el.classList.toggle('current', el.dataset.room === roomId);
   }
 
-  // Keep at least 1 column of context visible on each side of the player so
-  // connection lines into adjacent (off-viewport) areas remain partly visible.
-  // Camera only slides when the player gets within `EDGE_BUFFER` of an edge.
-  const col = room.col;
   const EDGE_BUFFER = 1;
-  if (col >= camCol + VIEWPORT_COLS - EDGE_BUFFER) camCol = col - VIEWPORT_COLS + 1 + EDGE_BUFFER;
-  else if (col - EDGE_BUFFER < camCol) camCol = col - EDGE_BUFFER;
+  camCol = panAxis(room.col, camCol, VIEWPORT_COLS, EDGE_BUFFER);
+  camRow = panAxis(room.row, camRow, VIEWPORT_ROWS, EDGE_BUFFER);
 
   const marker = document.getElementById('map-player');
   const inner  = document.getElementById('map-inner');
   const mx = room.x + ROOM_W / 2 - 5;
   const my = room.y + ROOM_H / 2 - 5;
+  const innerTx = `translate(${-camCol * COL_STEP}px, ${-camRow * ROW_STEP}px)`;
 
   if (!mapReady) {
     marker.style.transition = 'none';
     inner.style.transition  = 'none';
     marker.style.transform = `translate(${mx}px, ${my}px)`;
-    inner.style.transform  = `translateX(${-camCol * COL_STEP}px)`;
+    inner.style.transform  = innerTx;
     requestAnimationFrame(() => {
       marker.style.transition = '';
       inner.style.transition  = '';
@@ -366,7 +399,7 @@ function updateMapPlayer(roomId) {
     });
   } else {
     marker.style.transform = `translate(${mx}px, ${my}px)`;
-    inner.style.transform  = `translateX(${-camCol * COL_STEP}px)`;
+    inner.style.transform  = innerTx;
   }
 }
 
