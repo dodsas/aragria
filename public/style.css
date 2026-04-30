@@ -249,42 +249,6 @@ body {
   100% { transform: translateX(0); }
 }
 
-/* ── Room monsters live HP panel (대기화면 + 전투 시 동시 표기) ── */
-#room-monsters {
-  flex-shrink: 0;
-  margin: 12px 20px 0;
-  padding: 8px 12px;
-  border: 1px solid var(--accent-soft);
-  border-radius: 4px;
-  background: rgba(10, 12, 16, 0.8);
-  font-size: 13px;
-}
-#room-monsters[hidden] { display: none; }
-#room-monsters .rm-header {
-  color: var(--fg-dim);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin-bottom: 6px;
-}
-#room-monsters .rm-row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
-  align-items: center;
-  gap: 12px;
-  padding: 2px 0;
-}
-#room-monsters .rm-name { color: var(--c-monster); }
-#room-monsters .rm-bar {
-  font-family: var(--font-mono, monospace);
-  letter-spacing: 0;
-}
-#room-monsters .rm-bar .rm-bracket { color: var(--fg-dim); }
-#room-monsters .rm-bar .rm-fill { color: #d04040; }
-#room-monsters .rm-bar.rm-full .rm-fill { color: #6b8e23; }
-#room-monsters .rm-bar .rm-empty { opacity: 0.22; }
-#room-monsters .rm-num { color: var(--fg-dim); font-variant-numeric: tabular-nums; }
-
 /* ── Object view panel (UI for "looked-at" objects) ───── */
 #object-view {
   margin: 0 20px 12px;
@@ -529,6 +493,10 @@ body[data-sidebar="open"] #sidebar-toggle::before { content: '‹'; }
   #sidebar-resizer { display: none; }
   #viewport { border-left: none; }
   #log { padding-left: 36px; }   /* leave room for the centered side toggle */
+  /* iOS Safari auto-zooms on focus when input font-size < 16px and never
+     restores. Bump prompt + register inputs to 16px on mobile. */
+  #prompt,
+  #welcome-form input { font-size: 16px; }
   #touch-controls {
     display: flex;
     align-items: center;

@@ -1,7 +1,6 @@
 const logEl = document.getElementById('log');
 const objectViewEl = document.getElementById('object-view');
 const combatViewEl = document.getElementById('combat-view');
-const roomMonstersEl = document.getElementById('room-monsters');
 const promptForm = document.getElementById('prompt-form');
 const promptInput = document.getElementById('prompt');
 const equipmentEl = document.getElementById('equipment');
@@ -221,10 +220,6 @@ function renderCombat(combat) {
     combatViewEl.classList.remove('fading');
     lastCombat = { playerHp: null, foeHp: null };
     inCombat = false;
-    if (roomMonstersEl) {
-      roomMonstersEl.hidden = true;
-      roomMonstersEl.innerHTML = '';
-    }
     scrollLogToBottom();
     return;
   }
@@ -266,9 +261,8 @@ function renderCombat(combat) {
   }
 }
 
-// 룸 몬스터 라이브 HP 패널 + 액션 패드 타깃 소스. 서버 `room_monsters`는
-// monsters/objects/players 세 리스트를 함께 싣고 들어온다 — HP 바는 monsters
-// 만 쓰고, 액션 패드는 셋 모두를 모바일 서브메뉴에 채운다.
+// 액션 패드 타깃 소스. 서버 `room_monsters`는 monsters/objects/players 세
+// 리스트를 함께 싣고 들어온다 — 모바일 액션 패드 서브메뉴에 그대로 채운다.
 function renderRoomMonsters(msg) {
   const monsters = msg?.monsters || [];
   currentRoomTargets = {
@@ -277,31 +271,6 @@ function renderRoomMonsters(msg) {
     players: msg?.players || [],
   };
   renderActionPad();
-  if (!roomMonstersEl) return;
-  if (!inCombat || monsters.length === 0) {
-    roomMonstersEl.hidden = true;
-    roomMonstersEl.innerHTML = '';
-    return;
-  }
-  roomMonstersEl.hidden = false;
-  // innerHTML 한 번에 갈아끼우는 편이 row별 diff 보다 단순. 패널 크기상
-  // DOM 재생성 비용은 무시 가능하고, 깜빡임은 row 단위가 아니라 전체 단위로만
-  // 일어나기 때문에 시각적으로도 더 일관됨.
-  const cells = 12;
-  const rows = monsters.map((m) => {
-    const max = Math.max(1, m.maxHp || 1);
-    const hp = Math.max(0, Math.min(max, m.hp || 0));
-    const filled = Math.round((hp / max) * cells);
-    const fillStr = '█'.repeat(filled);
-    const emptyStr = '█'.repeat(cells - filled);
-    const fullCls = hp >= max ? ' rm-full' : '';
-    return `<div class="rm-row">`
-      + `<span class="rm-name">${escapeHtml(m.name || '?')}</span>`
-      + `<span class="rm-bar${fullCls}"><span class="rm-bracket">[</span><span class="rm-blocks rm-fill">${fillStr}</span><span class="rm-blocks rm-empty">${emptyStr}</span><span class="rm-bracket">]</span></span>`
-      + `<span class="rm-num">${hp} / ${max}</span>`
-      + `</div>`;
-  }).join('');
-  roomMonstersEl.innerHTML = `<div class="rm-header">이 방의 적</div>${rows}`;
 }
 
 const MONSTER_SPRITES = {
