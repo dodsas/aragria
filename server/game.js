@@ -1,7 +1,7 @@
 // Authoritative game state. Single in-memory world.
 // All commands flow through Game.handleCommand(player, input).
 
-import { MONSTER_RESPAWN_MS, DEFAULT_MONSTER_TIER, ATTACK_COOLDOWN_MS } from './config.js';
+import { MONSTER_RESPAWN_MS, DEFAULT_MONSTER_TIER, ATTACK_COOLDOWN_MS, MOVE_COOLDOWN_MS } from './config.js';
 
 let nextPlayerId = 1;
 
@@ -320,6 +320,8 @@ export class Game {
       combatTargetId: null,
       downed: false,
       lastAttackAt: 0,
+      lastMoveAt: 0,
+      pendingMove: null,
     };
     this.players.set(id, player);
 
@@ -333,6 +335,7 @@ export class Game {
   removePlayer(id) {
     const p = this.players.get(id);
     if (!p) return;
+    if (p.pendingMove) clearTimeout(p.pendingMove.timer);
     this.players.delete(id);
     this.broadcastRoom(p.roomId, { type: 'text', text: `${p.name}님이 떠났습니다.` });
   }
@@ -459,15 +462,45 @@ export class Game {
     this.send(viewer, { type: 'view', view: null });
   }
 
+  // Server-authoritative cooldown — see command.md. WASD key-repeat,
+  // duplicate clicks, and tampered clients all hit this gate first. During
+  // cooldown the move is QUEUED (not rejected): a single timer fires the
+  // pending move when the cooldown elapses. Latest input wins — pressing
+  // another direction replaces the queued move so timers can't pile up.
   move(player, dir) {
+    const now = Date.now();
+    const elapsed = now - player.lastMoveAt;
+    if (elapsed < MOVE_COOLDOWN_MS) {
+      if (player.pendingMove) clearTimeout(player.pendingMove.timer);
+      const remain = MOVE_COOLDOWN_MS - elapsed;
+      const remainSec = (remain / 1000).toFixed(1);
+      this.send(player, { type: 'system', text: `${remainSec}초 후 이동합니다.` });
+      const timer = setTimeout(() => {
+        // Stale-fire guard: player may have disconnected, and respawn
+        // explicitly clears pendingMove so a stale direction can't relocate
+        // them. If we get here, the queued intent is still valid.
+        if (!this.players.has(player.id)) return;
+        player.pendingMove = null;
+        this._doMove(player, dir);
+      }, remain);
+      player.pendingMove = { dir, timer };
+      return;
+    }
+    this._doMove(player, dir);
+  }
+
+  _doMove(player, dir) {
     const map = { n: 'north', s: 'south', e: 'east', w: 'west', '북': 'north', '남': 'south', '동': 'east', '서': 'west', '북쪽': 'north', '남쪽': 'south', '동쪽': 'east', '서쪽': 'west' };
     const d = map[dir] || dir;
     const room = ROOMS[player.roomId];
     const next = room.exits[d];
     if (!next) {
+      // Invalid direction does NOT consume the cooldown — players bumping
+      // into walls shouldn't be punished with a wait timer.
       this.send(player, { type: 'system', text: '그 방향으로는 갈 수 없습니다.' });
       return;
     }
+    player.lastMoveAt = Date.now();
     this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 ${d} 방향으로 떠났습니다.` }, player.id);
     player.roomId = next;
     this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 도착했습니다.` }, player.id);
@@ -684,6 +717,12 @@ export class Game {
   // Shared respawn flow for both monster-killed and PvP-killed players.
   _respawnAtSquare(player) {
     const fromRoom = player.roomId;
+    // Cancel any queued move — a pending direction tied to the pre-death
+    // room would relocate the just-respawned player away from the square.
+    if (player.pendingMove) {
+      clearTimeout(player.pendingMove.timer);
+      player.pendingMove = null;
+    }
     player.combatTargetId = null;
     player.downed = false;
     player.hp = Math.floor(player.maxHp * 0.3);
