@@ -55,6 +55,7 @@ The server is unaware of modes — WASD is a thin client wrapper that emits the 
 - `ui_main.md` — sidebar layout contract (position, structure, status protocol).
 - `movement.md` — movement input modes (text vs WASD) and key mapping.
 - `monster.md` — monster definition schema, tier system, and respawn rules.
+- `command.md` — server-authoritative input rate limits (attack cooldown, etc.).
 
 ### Commands
 

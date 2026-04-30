@@ -57,8 +57,18 @@ function handleMessage(msg) {
   }
 }
 
+// #log shares vertical space with sibling panels (#combat-view, #object-view)
+// inside #viewport's flex column. When those panels show/hide, #log's
+// clientHeight changes and a previously-set scrollTop is no longer at the
+// bottom. Defer the snap to the next frame so layout has settled first.
+function scrollLogToBottom() {
+  requestAnimationFrame(() => {
+    logEl.scrollTop = logEl.scrollHeight;
+  });
+}
+
 let combatDismissTimer = null;
-let lastCombat = { playerHp: null, monsterHp: null };
+let lastCombat = { playerHp: null, foeHp: null };
 function renderCombat(combat) {
   if (combatDismissTimer) {
     clearTimeout(combatDismissTimer);
@@ -68,7 +78,8 @@ function renderCombat(combat) {
     combatViewEl.hidden = true;
     combatViewEl.innerHTML = '';
     combatViewEl.classList.remove('fading');
-    lastCombat = { playerHp: null, monsterHp: null };
+    lastCombat = { playerHp: null, foeHp: null };
+    scrollLogToBottom();
     return;
   }
   combatViewEl.hidden = false;
@@ -77,13 +88,13 @@ function renderCombat(combat) {
 
   const fallen = combat.fallen || null;
   const playerHurt = lastCombat.playerHp != null && combat.player.hp < lastCombat.playerHp;
-  const monsterHurt = lastCombat.monsterHp != null && combat.monster.hp < lastCombat.monsterHp;
+  const foeHurt = lastCombat.foeHp != null && combat.foe.hp < lastCombat.foeHp;
 
   const stage = document.createElement('div');
   stage.className = 'cv-stage';
 
-  const actorMe = makeCombatActor(combat.player, false, fallen === 'player', playerHurt);
-  const actorFoe = makeCombatActor(combat.monster, true, fallen === 'monster', monsterHurt);
+  const actorMe = makeCombatActor(combat.player, false, fallen === 'me', playerHurt, null, 'player');
+  const actorFoe = makeCombatActor(combat.foe, true, fallen === 'foe', foeHurt, combat.killerName, combat.foe.kind || 'monster');
   const vs = document.createElement('div');
   vs.className = 'cv-vs';
   vs.textContent = fallen ? '💥' : '⚔';
@@ -94,13 +105,17 @@ function renderCombat(combat) {
 
   combatViewEl.appendChild(stage);
 
-  lastCombat = { playerHp: combat.player.hp, monsterHp: combat.monster.hp };
+  lastCombat = { playerHp: combat.player.hp, foeHp: combat.foe.hp };
+
+  // Showing the combat panel shrinks #log; re-pin the latest line.
+  scrollLogToBottom();
 
   if (fallen) {
+    // Total auto-dismiss = 4s (3600ms hold + 400ms fade).
     combatDismissTimer = setTimeout(() => {
       combatViewEl.classList.add('fading');
       combatDismissTimer = setTimeout(() => renderCombat(null), 400);
-    }, 1800);
+    }, 3600);
   }
 }
 
@@ -109,15 +124,15 @@ const MONSTER_SPRITES = {
   skeleton: () => skeletonSpriteSvg(),
 };
 
-function makeCombatActor(actor, isFoe, isFallen, isHurt) {
+function makeCombatActor(actor, isFoe, isFallen, isHurt, killerName = null, kind = 'monster') {
   const root = document.createElement('div');
   root.className = 'cv-actor' + (isFoe ? ' cv-foe' : ' cv-me')
     + (isFallen ? ' cv-fallen' : '') + (isHurt ? ' cv-hurt' : '');
 
   const sprite = document.createElement('div');
   sprite.className = 'cv-sprite';
-  const monsterSvg = isFoe && !isFallen && MONSTER_SPRITES[actor.defId];
-  if (!isFoe && !isFallen) {
+  const monsterSvg = isFoe && !isFallen && kind === 'monster' && MONSTER_SPRITES[actor.defId];
+  if (!isFallen && kind === 'player') {
     sprite.classList.add('cv-sprite-svg');
     sprite.innerHTML = playerSpriteSvg();
   } else if (monsterSvg) {
@@ -133,13 +148,22 @@ function makeCombatActor(actor, isFoe, isFallen, isHurt) {
   const shadow = document.createElement('div');
   shadow.className = 'cv-shadow';
 
+  const nameRow = document.createElement('div');
+  nameRow.className = 'cv-name-row';
   const name = document.createElement('div');
   name.className = 'cv-name';
   name.textContent = actor.name || '?';
+  nameRow.appendChild(name);
+  if (isFoe && isFallen && killerName) {
+    const by = document.createElement('div');
+    by.className = 'cv-killed-by';
+    by.textContent = `killed by ${killerName}`;
+    nameRow.appendChild(by);
+  }
 
   root.appendChild(sprite);
   root.appendChild(shadow);
-  root.appendChild(name);
+  root.appendChild(nameRow);
   root.appendChild(makeCombatBar(actor, isFoe, isFallen));
   return root;
 }
@@ -364,7 +388,7 @@ function appendLine(content, cls = 'line') {
     div.innerHTML = highlightText(content);
   }
   logEl.appendChild(div);
-  logEl.scrollTop = logEl.scrollHeight;
+  scrollLogToBottom();
 }
 
 function renderStatus(status) {
@@ -414,7 +438,7 @@ function renderObjectView(view) {
   if (!view) {
     objectViewEl.hidden = true;
     objectViewEl.innerHTML = '';
-    logEl.scrollTop = logEl.scrollHeight;
+    scrollLogToBottom();
     return;
   }
   objectViewEl.hidden = false;
@@ -461,7 +485,7 @@ function renderObjectView(view) {
     lore.textContent = view.lore;
     objectViewEl.appendChild(lore);
   }
-  logEl.scrollTop = logEl.scrollHeight;
+  scrollLogToBottom();
 }
 
 function sendCmd(input) {
