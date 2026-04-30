@@ -205,8 +205,9 @@ body {
   line-height: 1.1;
 }
 #combat-view .cv-bar-bracket { color: var(--fg-dim); }
-#combat-view .cv-bar-row.cv-me  .cv-bar-blocks { color: #4caf50; }
-#combat-view .cv-bar-row.cv-foe .cv-bar-blocks { color: #d04040; }
+#combat-view .cv-bar-row.cv-me  .cv-bar-fill { color: #4caf50; }
+#combat-view .cv-bar-row.cv-foe .cv-bar-fill { color: #d04040; }
+#combat-view .cv-bar-empty { opacity: 0.22; }
 #combat-view .cv-bar-num {
   color: var(--fg-dim);
   font-variant-numeric: tabular-nums;
@@ -222,7 +223,7 @@ body {
 }
 #combat-view .cv-foe.cv-fallen .cv-sprite { transform: rotate(12deg) translateY(2px); }
 #combat-view .cv-actor.cv-fallen .cv-name { color: var(--fg-dim); text-decoration: line-through; }
-#combat-view .cv-bar-row.cv-fallen .cv-bar-blocks { color: var(--fg-dim); }
+#combat-view .cv-bar-row.cv-fallen .cv-bar-fill { color: var(--fg-dim); }
 
 /* — Hit reaction shake — */
 #combat-view .cv-actor.cv-hurt .cv-sprite { animation: cv-shake 0.35s ease both; }
@@ -272,8 +273,9 @@ body {
   letter-spacing: 0;
 }
 #room-monsters .rm-bar .rm-bracket { color: var(--fg-dim); }
-#room-monsters .rm-bar .rm-blocks { color: #d04040; }
-#room-monsters .rm-bar.rm-full .rm-blocks { color: #6b8e23; }
+#room-monsters .rm-bar .rm-fill { color: #d04040; }
+#room-monsters .rm-bar.rm-full .rm-fill { color: #6b8e23; }
+#room-monsters .rm-bar .rm-empty { opacity: 0.22; }
 #room-monsters .rm-num { color: var(--fg-dim); font-variant-numeric: tabular-nums; }
 
 /* ── Object view panel (UI for "looked-at" objects) ───── */

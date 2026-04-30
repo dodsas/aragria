@@ -278,11 +278,12 @@ function renderRoomMonsters(monsters) {
     const max = Math.max(1, m.maxHp || 1);
     const hp = Math.max(0, Math.min(max, m.hp || 0));
     const filled = Math.round((hp / max) * cells);
-    const blocks = '█'.repeat(filled) + '░'.repeat(cells - filled);
+    const fillStr = '█'.repeat(filled);
+    const emptyStr = '█'.repeat(cells - filled);
     const fullCls = hp >= max ? ' rm-full' : '';
     return `<div class="rm-row">`
       + `<span class="rm-name">${escapeHtml(m.name || '?')}</span>`
-      + `<span class="rm-bar${fullCls}"><span class="rm-bracket">[</span><span class="rm-blocks">${blocks}</span><span class="rm-bracket">]</span></span>`
+      + `<span class="rm-bar${fullCls}"><span class="rm-bracket">[</span><span class="rm-blocks rm-fill">${fillStr}</span><span class="rm-blocks rm-empty">${emptyStr}</span><span class="rm-bracket">]</span></span>`
       + `<span class="rm-num">${hp} / ${max}</span>`
       + `</div>`;
   }).join('');
@@ -354,7 +355,6 @@ function makeCombatBar(actor, isFoe, isFallen) {
   const hp = Math.max(0, actor.hp);
   const cells = 12;
   const filled = Math.round((hp / max) * cells);
-  const blocks = '█'.repeat(filled) + '░'.repeat(cells - filled);
 
   const line = document.createElement('div');
   line.className = 'cv-bar-line';
@@ -362,13 +362,17 @@ function makeCombatBar(actor, isFoe, isFallen) {
   open.className = 'cv-bar-bracket';
   open.textContent = '[';
   const fill = document.createElement('span');
-  fill.className = 'cv-bar-blocks';
-  fill.textContent = blocks;
+  fill.className = 'cv-bar-blocks cv-bar-fill';
+  fill.textContent = '█'.repeat(filled);
+  const empty = document.createElement('span');
+  empty.className = 'cv-bar-blocks cv-bar-empty';
+  empty.textContent = '█'.repeat(cells - filled);
   const close = document.createElement('span');
   close.className = 'cv-bar-bracket';
   close.textContent = ']';
   line.appendChild(open);
   line.appendChild(fill);
+  line.appendChild(empty);
   line.appendChild(close);
 
   const num = document.createElement('div');
