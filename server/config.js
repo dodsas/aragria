@@ -21,4 +21,11 @@ export const ATTACK_COOLDOWN_MS = 1000;
 // in Game.move; rejected moves only produce a system message and do not
 // change the player's room. WASD key-repeat at 20–30 Hz is naturally absorbed
 // by this gate without separate throttling.
-export const MOVE_COOLDOWN_MS = 2000;
+export const MOVE_COOLDOWN_MS = 500;
+
+// Duration (ms) that a kill-stealer is blocked from leaving the room. Triggered
+// when player A lands the killing blow on a monster that another player B was
+// engaged with (B's combatTargetId pointed at the same monster). For the
+// duration, A's `move` is rejected with a notice naming B as the obstructor.
+// Anti-grief: prevents a kill-stealer from immediately fleeing the room.
+export const KILLSTEAL_MOVE_BLOCK_MS = 5000;

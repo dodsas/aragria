@@ -1,100 +1,14 @@
 // Authoritative game state. Single in-memory world.
 // All commands flow through Game.handleCommand(player, input).
 
-import { MONSTER_RESPAWN_MS, DEFAULT_MONSTER_TIER, ATTACK_COOLDOWN_MS, MOVE_COOLDOWN_MS } from './config.js';
+import { MONSTER_RESPAWN_MS, DEFAULT_MONSTER_TIER, ATTACK_COOLDOWN_MS, MOVE_COOLDOWN_MS, KILLSTEAL_MOVE_BLOCK_MS } from './config.js';
+import { loadZones } from './zones/index.js';
 
 let nextPlayerId = 1;
 
-// Forest is a 5×5 grid: forest_<col>_<row>, col/row in 0..4.
-// Rooms are generated procedurally; FOREST_OVERRIDES supplies prose & object
-// placement for the few "named" landmarks. Generic squares get fallback text.
-const FOREST_SIZE = 5;
-const FOREST_OVERRIDES = {
-  '0_0': {
-    name: '숲 입구',
-    desc: '신전 동쪽의 숲 가장자리. 울창한 나무들이 빛을 가리기 시작한다.',
-    objects: ['forest_signpost'],
-  },
-  '4_0': {
-    name: '북동 안개',
-    desc: '짙은 안개가 깔린 숲의 북동쪽 끝. 나무 사이로 바람 소리만 들린다.',
-  },
-  '3_1': {
-    name: '옹달샘',
-    desc: '맑은 물이 솟는 작은 샘. 이끼 낀 바위에 둘러싸여 있다.',
-    objects: ['spring'],
-  },
-  '2_2': {
-    name: '숲 광장',
-    desc: '거대한 고목이 하늘을 떠받치는 둥근 빈터. 잎 사이로 햇빛이 내려앉는다.',
-    objects: ['ancient_tree'],
-  },
-  '1_3': {
-    name: '버섯 군락',
-    desc: '낙엽 위로 핏빛 갓의 버섯이 줄지어 자라 있다.',
-    objects: ['mushrooms'],
-  },
-  '0_4': {
-    name: '부서진 사당',
-    desc: '돌기둥이 무너진 작은 사당터. 이끼가 모든 것을 덮고 있다.',
-    objects: ['stone_pillar'],
-  },
-  '4_4': {
-    name: '숲의 심장',
-    desc: '숲의 가장 깊은 곳. 짙은 그늘 속에 검은 돌 제단이 서 있다.',
-    objects: ['forest_altar'],
-  },
-};
-
-function buildForestRooms() {
-  const out = {};
-  for (let r = 0; r < FOREST_SIZE; r++) {
-    for (let c = 0; c < FOREST_SIZE; c++) {
-      const id = `forest_${c}_${r}`;
-      const exits = {};
-      if (r > 0) exits.north = `forest_${c}_${r - 1}`;
-      if (r < FOREST_SIZE - 1) exits.south = `forest_${c}_${r + 1}`;
-      if (c > 0) exits.west = `forest_${c - 1}_${r}`;
-      if (c < FOREST_SIZE - 1) exits.east = `forest_${c + 1}_${r}`;
-      if (c === 0 && r === 0) exits.west = 'temple';
-
-      const ov = FOREST_OVERRIDES[`${c}_${r}`] || {};
-      out[id] = {
-        id,
-        name: ov.name || `숲 (${c},${r})`,
-        desc: ov.desc || '울창한 나무들 사이로 좁은 길이 이어진다.',
-        exits,
-        objects: ov.objects || [],
-      };
-    }
-  }
-  return out;
-}
-
-const ROOMS = {
-  square: {
-    id: 'square',
-    name: '아라그리아 광장',
-    desc: '돌로 포장된 넓은 광장이다. 분수에서 물이 흐르고, 북쪽으로 시장이, 동쪽으로 신전이 보인다.',
-    exits: { north: 'market', east: 'temple' },
-    objects: ['fountain', 'crystal'],
-  },
-  market: {
-    id: 'market',
-    name: '시장 거리',
-    desc: '상인들의 외침이 가득한 좁은 거리. 남쪽으로 광장이 있다.',
-    exits: { south: 'square' },
-    objects: ['stall'],
-  },
-  temple: {
-    id: 'temple',
-    name: '낡은 신전',
-    desc: '먼지 쌓인 석상이 줄지어 서 있다. 서쪽으로 광장이, 동쪽으로 울창한 숲이 보인다.',
-    exits: { west: 'square', east: 'forest_0_0' },
-    objects: ['statue'],
-  },
-  ...buildForestRooms(),
-};
+// 룸/오브젝트/초기 스폰 콘텐츠는 zone 모듈에 분리되어 있다(server/zones/, zone.md).
+// 부팅 시 한 번 머지하여 글로벌 사전을 만든다. 룩업 모델은 그대로 — ROOMS[id], OBJECTS[key].
+const { rooms: ROOMS, objects: OBJECTS, spawns: INITIAL_SPAWNS } = loadZones();
 
 // Monster definitions. `tier` controls respawn timing (see config.js).
 // Tier 1 = lowest. Higher tiers can be added later with their own respawn ranges.
@@ -130,99 +44,6 @@ function spawnMonster(defId) {
   };
 }
 
-// Objects with `view` get UI rendering on `look`. Without `view`, prose only.
-const OBJECTS = {
-  fountain: {
-    name: '분수',
-    desc: '맑은 물이 끊임없이 솟아오른다.',
-    // prose only — no `view`
-  },
-  crystal: {
-    name: '수정 조각상',
-    desc: '광장 한가운데 박힌 푸른 수정. 안쪽에서 빛이 맥박처럼 뛴다.',
-    view: {
-      icon: '◆',
-      title: '아라그리아의 수정',
-      tags: ['신성', '고대유물'],
-      stats: [
-        { label: '마나 공명', value: 87, max: 100 },
-        { label: '균열도', value: 12, max: 100 },
-      ],
-      lore: '천 년 전, 첫 왕이 이곳에 박아 넣었다고 전해진다.',
-    },
-  },
-  stall: {
-    name: '노점',
-    desc: '먹을거리와 잡화가 어지러이 쌓여 있다.',
-  },
-  statue: {
-    name: '석상',
-    desc: '얼굴이 깎여나간 옛 신의 석상.',
-    view: {
-      icon: '☖',
-      title: '잊혀진 신의 석상',
-      tags: ['고대', '훼손'],
-      stats: [
-        { label: '봉인 강도', value: 3, max: 100 },
-      ],
-      lore: '이름은 더 이상 누구도 기억하지 못한다.',
-    },
-  },
-  forest_signpost: {
-    name: '나무 표지판',
-    desc: '낡은 나무 표지판에 서툰 글씨로 "숲 안쪽엔 들어가지 마시오"라 새겨져 있다.',
-  },
-  ancient_tree: {
-    name: '고목',
-    desc: '천 년은 됐을 법한 거대한 나무. 줄기에 사람 형상의 뒤틀린 흉터가 있다.',
-    view: {
-      icon: '✤',
-      title: '천 년의 고목',
-      tags: ['신성', '자연'],
-      stats: [
-        { label: '수령', value: 92, max: 100 },
-        { label: '정령 친화', value: 64, max: 100 },
-      ],
-      lore: '뿌리가 어디까지 뻗어 있는지 누구도 모른다.',
-    },
-  },
-  spring: {
-    name: '옹달샘',
-    desc: '바닥의 자갈까지 비치는 맑은 샘물. 한 모금 마시면 피로가 가시는 듯하다.',
-  },
-  mushrooms: {
-    name: '핏빛 버섯',
-    desc: '핏빛 갓의 버섯이 군락을 이루고 있다. 만지면 위험할지도 모른다.',
-  },
-  stone_pillar: {
-    name: '부서진 돌기둥',
-    desc: '깨진 돌기둥에 잊혀진 룬 문양이 새겨져 있다.',
-    view: {
-      icon: '⚱',
-      title: '잊혀진 사당의 돌기둥',
-      tags: ['고대', '훼손'],
-      stats: [
-        { label: '룬 잔존', value: 21, max: 100 },
-      ],
-      lore: '문양은 지워졌지만, 신성의 기운은 아직 머문다.',
-    },
-  },
-  forest_altar: {
-    name: '검은 제단',
-    desc: '숲 속에 외따로 선 검은 돌 제단. 표면에 마른 핏자국이 남아 있다.',
-    view: {
-      icon: '☗',
-      title: '숲의 검은 제단',
-      tags: ['금기', '의식'],
-      stats: [
-        { label: '봉인', value: 4, max: 100 },
-        { label: '오염', value: 88, max: 100 },
-      ],
-      lore: '여기서 무언가가 깨어나고 있다.',
-    },
-  },
-};
-
 const STARTING_EQUIPMENT = () => ({
   head: null,
   body: { id: 'tunic', name: '낡은 튜닉', icon: '⛊' },
@@ -255,8 +76,12 @@ export class Game {
   }
 
   _spawnMonsters() {
-    this.roomMonsters.set('market', [spawnMonster('goblin')]);
-    this.roomMonsters.set('temple', [spawnMonster('skeleton')]);
+    // 초기 스폰은 zone 모듈의 spawns 선언에서 온다(zone.md 참조).
+    for (const { roomId, defId } of INITIAL_SPAWNS) {
+      const list = this.roomMonsters.get(roomId) || [];
+      list.push(spawnMonster(defId));
+      this.roomMonsters.set(roomId, list);
+    }
   }
 
   scheduleRespawn(roomId, defId) {
@@ -322,6 +147,8 @@ export class Game {
       lastAttackAt: 0,
       lastMoveAt: 0,
       pendingMove: null,
+      moveBlockedUntil: 0,
+      moveBlockedBy: null,
     };
     this.players.set(id, player);
 
@@ -469,6 +296,16 @@ export class Game {
   // another direction replaces the queued move so timers can't pile up.
   move(player, dir) {
     const now = Date.now();
+    // Kill-steal block: short-circuits any move attempt (including queued ones —
+    // pendingMove was cleared when the block was applied). Blocked input is
+    // REJECTED, not queued, so the player can't stack a move that auto-fires
+    // the moment the block lifts.
+    if (player.moveBlockedUntil > now) {
+      const remainSec = Math.ceil((player.moveBlockedUntil - now) / 1000);
+      const blocker = player.moveBlockedBy || '누군가';
+      this.send(player, { type: 'system', text: `${blocker}님이 당신의 이동을 방해중입니다. (${remainSec}초 후 이동가능)` });
+      return;
+    }
     const elapsed = now - player.lastMoveAt;
     if (elapsed < MOVE_COOLDOWN_MS) {
       if (player.pendingMove) clearTimeout(player.pendingMove.timer);
@@ -587,8 +424,11 @@ export class Game {
     ]);
 
     // Push HP update to other players in this room currently engaged with the
-    // same monster, so they see the bar drain in real time.
+    // same monster, so they see the bar drain in real time. On a killing blow
+    // we also flag the killer as a kill-stealer if any of these onlookers were
+    // engaged with this same monster — they are the victims of the steal.
     const engagementKey = `m${target.id}`;
+    let killStealVictimName = null;
     for (const p of this.players.values()) {
       if (p.id === player.id) continue;
       if (p.roomId !== player.roomId) continue;
@@ -606,6 +446,9 @@ export class Game {
           { text: player.name, cls: 'tx-player' },
           { text: '님에게 쓰러졌다.' },
         ]);
+        // First engaged onlooker becomes the named blocker. Multiple victims
+        // could exist; one name is enough for the message.
+        if (!killStealVictimName) killStealVictimName = p.name;
       }
       this.pushCombat(p, target, 'monster', killingBlow ? 'foe' : null, killingBlow ? player.name : null);
       if (killingBlow) p.combatTargetId = null;
@@ -618,6 +461,18 @@ export class Game {
       this.seg(player, [{ text: target.name, cls: 'monster-name' }, { text: '이(가) 쓰러졌다!' }]);
       this.pushCombat(player, target, 'monster', 'foe');
       player.combatTargetId = null;
+      if (killStealVictimName) {
+        // Anti-grief: kill-stealer can't immediately walk away. Cancel any
+        // queued move first — otherwise it would auto-fire under the block.
+        if (player.pendingMove) {
+          clearTimeout(player.pendingMove.timer);
+          player.pendingMove = null;
+        }
+        player.moveBlockedUntil = Date.now() + KILLSTEAL_MOVE_BLOCK_MS;
+        player.moveBlockedBy = killStealVictimName;
+        const sec = Math.ceil(KILLSTEAL_MOVE_BLOCK_MS / 1000);
+        this.send(player, { type: 'system', text: `${killStealVictimName}님이 당신의 이동을 방해중입니다. (${sec}초 후 이동가능)` });
+      }
       this.scheduleRespawn(roomId, target.defId);
       return;
     }
@@ -725,6 +580,10 @@ export class Game {
     }
     player.combatTargetId = null;
     player.downed = false;
+    // Death clears any pending kill-steal block — the player is no longer in
+    // the disputed room, so the anti-flee gate has nothing to enforce.
+    player.moveBlockedUntil = 0;
+    player.moveBlockedBy = null;
     player.hp = Math.floor(player.maxHp * 0.3);
     player.roomId = 'square';
     if (fromRoom !== 'square') {

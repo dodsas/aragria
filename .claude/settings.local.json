@@ -4,7 +4,12 @@
       "Bash(npm start *)",
       "Bash(pkill -f \"node server/index.js\")",
       "Bash(npm run *)",
-      "Skill(update-config)"
+      "Skill(update-config)",
+      "Bash(node --check server/zones/town.js)",
+      "Bash(node --check server/zones/forest.js)",
+      "Bash(node --check server/zones/index.js)",
+      "Bash(node --check server/game.js)",
+      "Bash(node *)"
     ]
   }
 }

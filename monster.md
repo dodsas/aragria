@@ -45,7 +45,7 @@ When the monster respawns, players currently in the room receive a single `text`
 ## Adding a new monster
 
 1. Add an entry to `MONSTER_DEFS` with all required fields, including `tier`.
-2. Place it into a room by adding `this.roomMonsters.set('<roomId>', [spawnMonster('<defId>')])` inside `Game._spawnMonsters()`.
+2. Place it into a room by adding `{ roomId: '<roomId>', defId: '<defId>' }` to the `spawns` array of the appropriate zone module under `server/zones/` (see `zone.md`).
 3. If introducing a new tier, also add a `MONSTER_RESPAWN_MS[<tier>]` entry in `server/config.js`.
 
 That's it — no client-side changes are required. Icons render via the existing `combat` message protocol.
