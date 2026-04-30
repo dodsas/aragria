@@ -81,79 +81,176 @@ body {
 #log .tx-label  { color: var(--c-label); text-transform: none; }
 #log .tx-quote  { color: var(--c-room); font-style: italic; }
 
-/* ── Combat panel (player vs monster) ──────────────────── */
+/* ── Combat panel (Dragon Knight 2 style) ──────────────── */
 #combat-view {
   flex-shrink: 0;
   margin: 12px 20px 0;
-  padding: 12px 16px;
-  background: var(--bg-elev);
-  border: 1px solid var(--danger);
-  border-radius: 4px;
+  padding: 0;
+  border: 2px solid var(--accent-soft);
+  border-radius: 6px;
+  overflow: hidden;
+  position: relative;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  gap: 14px;
+  grid-template-rows: 1fr auto;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 90%, rgba(201, 161, 74, 0.10), transparent 70%),
+    linear-gradient(180deg, #07080b 0%, #181b22 55%, #0a0c10 100%);
+  box-shadow:
+    inset 0 0 24px rgba(0, 0, 0, 0.6),
+    0 4px 16px rgba(0, 0, 0, 0.5);
 }
 #combat-view[hidden] { display: none; }
-#combat-view .cv-side {
+#combat-view.fading { opacity: 0; transition: opacity 0.4s ease; }
+
+/* — Stage (sprites face each other) — */
+#combat-view .cv-stage {
+  position: relative;
   display: grid;
-  grid-template-columns: 44px 1fr;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: end;
+  padding: 22px 24px 14px;
+  gap: 16px;
+  min-height: 130px;
+}
+#combat-view .cv-stage::after {
+  content: '';
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 8px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent-soft) 30%, var(--accent-soft) 70%, transparent);
+  opacity: 0.45;
+}
+#combat-view .cv-actor {
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
+  justify-self: center;
+  position: relative;
+  z-index: 1;
+}
+#combat-view .cv-actor.cv-foe { /* monster on the right, player on the left */ }
+#combat-view .cv-sprite {
+  font-size: 56px;
+  line-height: 1;
+  filter: drop-shadow(0 6px 4px rgba(0, 0, 0, 0.7));
+  transform-origin: bottom center;
+  animation: cv-bob 2.4s ease-in-out infinite;
+}
+#combat-view .cv-foe .cv-sprite { animation-delay: 1.2s; }
+#combat-view .cv-foe .cv-icon { display: inline-block; transform: scaleX(-1); }
+#combat-view .cv-shadow {
+  width: 56px;
+  height: 8px;
+  margin-top: 2px;
+  background: radial-gradient(ellipse, rgba(0, 0, 0, 0.75), transparent 70%);
+}
+#combat-view .cv-name {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+}
+#combat-view .cv-foe .cv-name { color: var(--c-monster); }
+#combat-view .cv-vs {
+  align-self: center;
+  font-size: 22px;
+  color: var(--accent-soft);
+  text-shadow: 0 0 8px rgba(201, 161, 74, 0.4);
+  letter-spacing: 0.2em;
+}
+
+/* — HP bars panel under the stage — */
+#combat-view .cv-bars {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  padding: 12px 18px 14px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.35));
+  border-top: 1px solid var(--accent-soft);
+}
+#combat-view .cv-bar-row {
+  display: grid;
+  grid-template-rows: auto auto;
+  gap: 4px;
   min-width: 0;
 }
-#combat-view .cv-side.cv-foe { grid-template-columns: 1fr 44px; text-align: right; }
-#combat-view .cv-icon {
-  font-size: 32px;
-  line-height: 1;
-  text-align: center;
+#combat-view .cv-bar-label {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
 }
-#combat-view .cv-info { min-width: 0; }
-#combat-view .cv-name {
-  font-size: 13px;
-  color: var(--accent);
-  white-space: nowrap;
+#combat-view .cv-bar-row.cv-foe .cv-bar-label { color: var(--c-monster); }
+#combat-view .cv-bar-track {
+  position: relative;
+  height: 16px;
+  border: 1px solid #2c2e36;
+  border-radius: 2px;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 4px, rgba(0, 0, 0, 0.45) 4px 5px),
+    #0a0b0e;
+  box-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.6), inset 0 -1px 0 rgba(255, 255, 255, 0.04);
   overflow: hidden;
-  text-overflow: ellipsis;
 }
-#combat-view .cv-side.cv-foe .cv-name { color: var(--danger); }
-#combat-view .cv-hp-track {
-  height: 8px;
-  background: #2a2d35;
-  border-radius: 4px;
-  overflow: hidden;
-  margin-top: 4px;
-}
-#combat-view .cv-hp-fill {
+#combat-view .cv-bar-fill {
   height: 100%;
-  background: var(--ok);
-  transition: width 0.25s ease;
+  background: linear-gradient(180deg, #94e090 0%, #4f9b4c 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25), inset 0 -2px 4px rgba(0, 0, 0, 0.35);
+  transition: width 0.35s ease;
+  position: relative;
 }
-#combat-view .cv-hp-fill.low { background: var(--accent); }
-#combat-view .cv-hp-fill.crit { background: var(--danger); }
-#combat-view .cv-hp-num {
+#combat-view .cv-bar-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg, transparent 0 4px, rgba(255, 255, 255, 0.07) 4px 5px);
+  pointer-events: none;
+}
+#combat-view .cv-bar-fill.low  { background: linear-gradient(180deg, #efce6c 0%, #a3853a 100%); }
+#combat-view .cv-bar-fill.crit { background: linear-gradient(180deg, #e07b50 0%, #a13830 100%); }
+#combat-view .cv-bar-num {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
-  color: var(--fg-dim);
-  margin-top: 2px;
-}
-#combat-view .cv-vs {
-  color: var(--danger);
-  font-size: 18px;
   font-weight: 700;
-  letter-spacing: 0.1em;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
 }
-#combat-view .cv-side.cv-fallen .cv-icon {
-  filter: grayscale(1) brightness(0.6);
-  color: var(--fg-dim);
+
+/* — Fallen state — */
+#combat-view .cv-actor.cv-fallen .cv-sprite {
+  animation: none;
+  filter: grayscale(1) brightness(0.5) drop-shadow(0 4px 4px rgba(0, 0, 0, 0.7));
+  transform: rotate(-12deg) translateY(2px);
 }
-#combat-view .cv-side.cv-fallen .cv-name {
-  color: var(--fg-dim);
-  text-decoration: line-through;
+#combat-view .cv-foe.cv-fallen .cv-sprite { transform: rotate(12deg) translateY(2px); }
+#combat-view .cv-actor.cv-fallen .cv-name { color: var(--fg-dim); text-decoration: line-through; }
+#combat-view .cv-bar-row.cv-fallen .cv-bar-fill { background: var(--fg-dim); }
+
+/* — Hit reaction shake — */
+#combat-view .cv-actor.cv-hurt .cv-sprite { animation: cv-shake 0.35s ease both; }
+
+@keyframes cv-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
 }
-#combat-view .cv-side.cv-fallen .cv-hp-fill { background: var(--fg-dim); }
-#combat-view.fading {
-  opacity: 0;
-  transition: opacity 0.4s ease;
+#combat-view .cv-foe .cv-sprite { /* keep flipped while bobbing */ }
+@keyframes cv-shake {
+  0%   { transform: translateX(0); }
+  20%  { transform: translateX(-6px) rotate(-3deg); }
+  40%  { transform: translateX(5px) rotate(3deg); }
+  60%  { transform: translateX(-4px); }
+  80%  { transform: translateX(3px); }
+  100% { transform: translateX(0); }
 }
 
 /* ── Object view panel (UI for "looked-at" objects) ───── */

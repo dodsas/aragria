@@ -58,6 +58,7 @@ function handleMessage(msg) {
 }
 
 let combatDismissTimer = null;
+let lastCombat = { playerHp: null, monsterHp: null };
 function renderCombat(combat) {
   if (combatDismissTimer) {
     clearTimeout(combatDismissTimer);
@@ -67,6 +68,7 @@ function renderCombat(combat) {
     combatViewEl.hidden = true;
     combatViewEl.innerHTML = '';
     combatViewEl.classList.remove('fading');
+    lastCombat = { playerHp: null, monsterHp: null };
     return;
   }
   combatViewEl.hidden = false;
@@ -74,18 +76,33 @@ function renderCombat(combat) {
   combatViewEl.classList.remove('fading');
 
   const fallen = combat.fallen || null;
-  const sideMe = makeCombatSide(combat.player, false, fallen === 'player');
-  const sideFoe = makeCombatSide(combat.monster, true, fallen === 'monster');
+  const playerHurt = lastCombat.playerHp != null && combat.player.hp < lastCombat.playerHp;
+  const monsterHurt = lastCombat.monsterHp != null && combat.monster.hp < lastCombat.monsterHp;
+
+  const stage = document.createElement('div');
+  stage.className = 'cv-stage';
+
+  const actorMe = makeCombatActor(combat.player, false, fallen === 'player', playerHurt);
+  const actorFoe = makeCombatActor(combat.monster, true, fallen === 'monster', monsterHurt);
   const vs = document.createElement('div');
   vs.className = 'cv-vs';
-  vs.textContent = fallen ? '💥' : 'VS';
+  vs.textContent = fallen ? '💥' : '⚔';
 
-  combatViewEl.appendChild(sideMe);
-  combatViewEl.appendChild(vs);
-  combatViewEl.appendChild(sideFoe);
+  stage.appendChild(actorMe);
+  stage.appendChild(vs);
+  stage.appendChild(actorFoe);
+
+  const bars = document.createElement('div');
+  bars.className = 'cv-bars';
+  bars.appendChild(makeCombatBar(combat.player, false, fallen === 'player'));
+  bars.appendChild(makeCombatBar(combat.monster, true, fallen === 'monster'));
+
+  combatViewEl.appendChild(stage);
+  combatViewEl.appendChild(bars);
+
+  lastCombat = { playerHp: combat.player.hp, monsterHp: combat.monster.hp };
 
   if (fallen) {
-    // Linger for a beat so the player sees the defeat, then fade out.
     combatDismissTimer = setTimeout(() => {
       combatViewEl.classList.add('fading');
       combatDismissTimer = setTimeout(() => renderCombat(null), 400);
@@ -93,43 +110,55 @@ function renderCombat(combat) {
   }
 }
 
-function makeCombatSide(actor, isFoe, isFallen) {
+function makeCombatActor(actor, isFoe, isFallen, isHurt) {
   const root = document.createElement('div');
-  root.className = 'cv-side' + (isFoe ? ' cv-foe' : '') + (isFallen ? ' cv-fallen' : '');
+  root.className = 'cv-actor' + (isFoe ? ' cv-foe' : ' cv-me')
+    + (isFallen ? ' cv-fallen' : '') + (isHurt ? ' cv-hurt' : '');
 
+  const sprite = document.createElement('div');
+  sprite.className = 'cv-sprite';
   const icon = document.createElement('div');
   icon.className = 'cv-icon';
   icon.textContent = isFallen ? '✝' : (actor.icon || (isFoe ? '👾' : '🧙'));
+  sprite.appendChild(icon);
 
-  const info = document.createElement('div');
-  info.className = 'cv-info';
+  const shadow = document.createElement('div');
+  shadow.className = 'cv-shadow';
+
   const name = document.createElement('div');
   name.className = 'cv-name';
   name.textContent = actor.name || '?';
+
+  root.appendChild(sprite);
+  root.appendChild(shadow);
+  root.appendChild(name);
+  return root;
+}
+
+function makeCombatBar(actor, isFoe, isFallen) {
+  const row = document.createElement('div');
+  row.className = 'cv-bar-row' + (isFoe ? ' cv-foe' : ' cv-me') + (isFallen ? ' cv-fallen' : '');
+
+  const label = document.createElement('div');
+  label.className = 'cv-bar-label';
+  label.textContent = isFoe ? '적 HP' : 'HP';
+
   const track = document.createElement('div');
-  track.className = 'cv-hp-track';
+  track.className = 'cv-bar-track';
   const fill = document.createElement('div');
   const max = actor.maxHp || 1;
   const pct = Math.max(0, Math.min(100, (actor.hp / max) * 100));
-  fill.className = 'cv-hp-fill' + (pct < 25 ? ' crit' : pct < 50 ? ' low' : '');
+  fill.className = 'cv-bar-fill' + (pct < 25 ? ' crit' : pct < 50 ? ' low' : '');
   fill.style.width = `${pct}%`;
-  track.appendChild(fill);
   const num = document.createElement('div');
-  num.className = 'cv-hp-num';
-  num.textContent = `HP ${actor.hp}/${actor.maxHp}`;
+  num.className = 'cv-bar-num';
+  num.textContent = `${actor.hp} / ${actor.maxHp}`;
+  track.appendChild(fill);
+  track.appendChild(num);
 
-  info.appendChild(name);
-  info.appendChild(track);
-  info.appendChild(num);
-
-  if (isFoe) {
-    root.appendChild(info);
-    root.appendChild(icon);
-  } else {
-    root.appendChild(icon);
-    root.appendChild(info);
-  }
-  return root;
+  row.appendChild(label);
+  row.appendChild(track);
+  return row;
 }
 
 const escapeHtml = (s) => s
