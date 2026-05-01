@@ -32,6 +32,17 @@ const EQUIP_SLOTS = [
 
 let ws;
 let backoff = 500;
+// duplicate_pending / kicked_by_other 모달이 떠 있을 때 따라오는 close 가 generic
+// auto-reconnect 분기로 빠지면 핑퐁 무한 루프가 된다. 두 경로에서 true 로 올려
+// 현재 socket 의 close 핸들러가 재연결을 건너뛰도록 한다. connect() 마다 reset.
+let suppressReconnect = false;
+// 신규 탭이 force_takeover 를 보낸 뒤 takeover 성공의 신호로 server_info 를 받기
+// 직전까지 true. 모달을 자동으로 정리하는 트리거.
+let awaitingTakeover = false;
+
+function sendWS(obj) {
+  try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); } catch {}
+}
 
 // Persistent session id. Lets a refresh / brief disconnect resume the same
 // in-world player object (HP, kill-steal block, room) within the server's
@@ -54,6 +65,11 @@ function getSid() {
 }
 
 function connect() {
+  // 새 connect 마다 두 플래그 초기화. 직전 connect 가 cancel/kick 으로 끝났더라도
+  // 새 시도는 깨끗한 상태에서 시작.
+  suppressReconnect = false;
+  awaitingTakeover = false;
+
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws?sid=${encodeURIComponent(getSid())}`);
 
@@ -61,7 +77,9 @@ function connect() {
     connStatus.textContent = '연결됨';
     connStatus.className = 'on';
     backoff = 500;
-    hidePolicyOverlay();
+    // duplicate_pending 가 곧 도착할 수 있으므로 오버레이는 자동 정리하지 않는다.
+    // 정상 attach 였다면 server_info → status/welcome 가 자연 흐름으로 진행되고
+    // 오버레이는 force_takeover 성공 분기에서 정리된다.
   });
 
   ws.addEventListener('message', (ev) => {
@@ -75,32 +93,24 @@ function connect() {
     const reason = ev.reason || '';
     connStatus.className = 'off';
 
-    if (code === 4001) {
-      // DEV-only newer-wins takeover. 프로덕션은 older-wins(서버에서 4004 로
-      // 신규를 거절)이라 이 경로는 거의 발생하지 않지만, DEV 같은 탭 새로고침
-      // race 등에서 옛 소켓이 받을 수 있어 안전망으로 유지.
+    if (suppressReconnect) {
+      // duplicate_pending / kicked_by_other 가 이미 모달로 안내 중. 사용자 결정
+      // 전에 close(혹은 1005/1006 mangling)이 와도 generic auto-reconnect 로
+      // 빠지면 두 탭 핑퐁 루프가 되므로 여기서 종결.
+      connStatus.textContent = '연결 끊김';
+      return;
+    }
+
+    if (code === 4001 || code === 4004) {
+      // 안전망: kicked_by_other / duplicate_pending JSON 이 어떤 이유로 누락된
+      // 채 close 만 도착한 경우. 자동 재연결 금지하고 단일 버튼 안내만 표시.
       connStatus.textContent = '다른 탭에서 접속됨 — 이 탭은 종료됨';
       showPolicyOverlay({
         glyph: '⛔',
         title: '중복 접속 차단',
-        msg: '같은 계정으로 다른 탭(또는 창)에서 새 접속이 감지되어<br/>이 탭의 연결이 종료되었습니다.',
-        sub: '한 PC에서는 한 캐릭터만 동시에 접속할 수 있어요. 이 탭에서 계속하려면 아래 버튼을 누르세요 — 다른 탭이 자동으로 끊어집니다.',
+        msg: '다른 탭(또는 창)에서 접속이 감지되어<br/>이 탭의 연결이 종료되었습니다.',
+        sub: '이 탭에서 계속하려면 아래 버튼을 누르세요. 다른 탭의 연결이 끊어집니다.',
         action: '이 탭에서 다시 시작',
-        onAction: () => { hidePolicyOverlay(); connect(); },
-      });
-      return;
-    }
-    if (code === 4004) {
-      // 같은 sid 의 다른 탭이 이미 접속 중이라 서버가 이쪽 소켓을 거절(older-wins).
-      // 두 탭 사이 newer-wins 핑퐁 무한 루프를 막기 위해 자동 재연결 절대 금지.
-      // 사용자가 다른 탭을 닫고 「이 탭에서 다시 시도」를 눌러야 connect().
-      connStatus.textContent = '다른 탭에서 접속 중 — 이 탭은 차단됨';
-      showPolicyOverlay({
-        glyph: '⛔',
-        title: '중복 접속 차단',
-        msg: '같은 PC의 다른 탭(또는 창)에서 이미 접속 중이어서<br/>이 탭의 연결이 거절되었습니다.',
-        sub: '한 PC에서는 한 캐릭터만 동시에 접속할 수 있어요. 이 탭에서 계속하려면 다른 탭을 먼저 닫고 아래 버튼을 누르세요.',
-        action: '이 탭에서 다시 시도',
         onAction: () => { hidePolicyOverlay(); connect(); },
       });
       return;
@@ -139,6 +149,27 @@ let serverVersion = null;
 let serverUpdateTriggered = false;
 
 function handleMessage(msg) {
+  // 중복 접속 브릿지 페이즈는 일반 라우팅보다 앞에서 가로챈다 — 사용자에게
+  // 결정 모달을 띄우고 close 핸들러의 재연결 정책을 바꾸기 위해.
+  if (msg?.type === 'duplicate_pending') {
+    suppressReconnect = true;
+    showDuplicatePendingOverlay();
+    return;
+  }
+  if (msg?.type === 'kicked_by_other') {
+    suppressReconnect = true;
+    showKickedOverlay();
+    return;
+  }
+  // force_takeover 후 서버가 정상 attach 했음을 알리는 server_info 도착 시
+  // 모달 정리 + 재연결 정책 정상화. 일반 첫 연결의 server_info 는
+  // awaitingTakeover=false 라 이 분기를 타지 않는다.
+  if (awaitingTakeover && msg?.type === 'server_info') {
+    awaitingTakeover = false;
+    suppressReconnect = false;
+    hidePolicyOverlay();
+  }
+
   switch (msg.type) {
     case 'text':    appendLine(msg.segments ?? msg.text, 'line'); break;
     case 'system':  appendLine(msg.text, 'line system'); break;
@@ -156,6 +187,60 @@ function handleMessage(msg) {
       break;
     case 'server_info': handleServerInfo(msg.version); break;
   }
+}
+
+// 신규 탭에서 「이미 다른 탭에서 접속 중」 브릿지 페이즈 모달. 사용자가 「이전
+// 접속 끊고 계속」 을 누르면 force_takeover 를 보내 기존 탭을 끊고 이 탭이
+// 활성. 「취소」 면 cancel_connect 후 이 탭의 접속만 종료.
+function showDuplicatePendingOverlay() {
+  connStatus.textContent = '이미 다른 탭에서 접속 중 — 결정 대기';
+  showPolicyOverlay({
+    glyph: '⚠',
+    title: '이미 접속 중',
+    msg: '같은 PC의 다른 탭(또는 창)에서 이미 접속 중입니다.<br/>이전 접속을 끊고 이 탭에서 계속하시겠습니까?',
+    sub: '「이전 접속 끊고 계속」 을 누르면 다른 탭의 연결이 종료되고 이 탭이 활성 탭이 됩니다. 「취소」 를 누르면 이 탭의 접속만 종료됩니다.',
+    action: '이전 접속 끊고 계속',
+    onAction: () => {
+      awaitingTakeover = true;
+      sendWS({ type: 'force_takeover' });
+      // 모달은 server_info 도착 시 자동 정리. 사용자에게 진행 중임을 보여줌.
+      const btn = document.getElementById('policy-action');
+      const secBtn = document.getElementById('policy-action-secondary');
+      if (btn) { btn.disabled = true; btn.textContent = '연결 정리 중…'; }
+      if (secBtn) secBtn.disabled = true;
+    },
+    secondary: '취소',
+    onSecondary: () => {
+      sendWS({ type: 'cancel_connect' });
+      // suppressReconnect 는 이미 true. close 가 따라와도 close 핸들러에서 무시.
+      // 사용자에게 종료 상태 + 재시도 옵션을 갈아끼운다.
+      showPolicyOverlay({
+        glyph: '⛔',
+        title: '접속 취소됨',
+        msg: '이 탭의 접속을 취소했습니다.<br/>다른 탭에서 계속 플레이하세요.',
+        sub: '이 탭에서 다시 접속하려면 아래 버튼을 누르세요.',
+        action: '이 탭에서 다시 시도',
+        onAction: () => { hidePolicyOverlay(); connect(); },
+      });
+    },
+  });
+}
+
+// 기존 탭이 다른 탭의 force_takeover 로 끊겼을 때의 모달. 「이 탭에서 계속하기」
+// 를 누르면 connect() — 이번엔 기존 탭 입장에서 다시 duplicate_pending 모달이
+// 떠 force_takeover 를 보내면 반대 방향으로 회복. 「닫기」 면 그대로 종료.
+function showKickedOverlay() {
+  connStatus.textContent = '다른 탭에서 접속됨 — 이 탭은 종료됨';
+  showPolicyOverlay({
+    glyph: '⛔',
+    title: '다른 탭에서 접속됨',
+    msg: '같은 계정으로 다른 탭(또는 창)에서 새 접속이 시작되어<br/>이 탭의 연결이 종료되었습니다.',
+    sub: '이 탭으로 돌아오려면 「이 탭에서 계속하기」 를 누르세요. 다른 탭의 연결이 끊어집니다.',
+    action: '이 탭에서 계속하기',
+    onAction: () => { hidePolicyOverlay(); connect(); },
+    secondary: '닫기',
+    onSecondary: () => { hidePolicyOverlay(); },
+  });
 }
 
 function handleServerInfo(version) {
@@ -196,14 +281,16 @@ function showServerUpdateModal() {
 // `#conn-status` 만으로는 본문 로그가 그대로 멈춰 있어 차단을 인지하기 어렵다.
 // 풀스크린으로 띄워 「왜 차단됐고 무엇을 하면 풀리는지」를 1차 메시지로 노출.
 let policyActionHandler = null;
+let policySecondaryHandler = null;
 let policyTimer = null;
-function showPolicyOverlay({ glyph, title, msg, sub, action, onAction }) {
+function showPolicyOverlay({ glyph, title, msg, sub, action, onAction, secondary, onSecondary }) {
   const overlay = document.getElementById('policy-overlay');
   const glyphEl = document.getElementById('policy-glyph');
   const titleEl = document.getElementById('policy-title');
   const msgEl = document.getElementById('policy-msg');
   const subEl = document.getElementById('policy-sub');
   const btn = document.getElementById('policy-action');
+  const secBtn = document.getElementById('policy-action-secondary');
   if (!overlay || !btn) return;
   if (glyphEl) glyphEl.textContent = glyph || '⛔';
   if (titleEl) titleEl.textContent = title || '접속 차단';
@@ -217,6 +304,21 @@ function showPolicyOverlay({ glyph, title, msg, sub, action, onAction }) {
   if (policyActionHandler) btn.removeEventListener('click', policyActionHandler);
   policyActionHandler = onAction || (() => hidePolicyOverlay());
   btn.addEventListener('click', policyActionHandler);
+
+  if (secBtn) {
+    if (policySecondaryHandler) secBtn.removeEventListener('click', policySecondaryHandler);
+    if (secondary) {
+      secBtn.textContent = secondary;
+      secBtn.disabled = false;
+      secBtn.hidden = false;
+      policySecondaryHandler = onSecondary || (() => hidePolicyOverlay());
+      secBtn.addEventListener('click', policySecondaryHandler);
+    } else {
+      secBtn.hidden = true;
+      policySecondaryHandler = null;
+    }
+  }
+
   overlay.hidden = false;
   setTimeout(() => btn.focus(), 0);
 }

@@ -21,6 +21,11 @@ const SERVER_VERSION = Date.now();
 // localhost doesn't trip the gate.
 const DEV = !!process.env.DEV;
 
+// 같은 sid 의 다른 탭이 살아 있을 때 신규 소켓이 사용자 결정을 기다리는 시간.
+// 「duplicate_pending」 으로 안내한 뒤 force_takeover/cancel_connect 가 안 오면
+// 서버가 끊는다. 너무 짧으면 모달 읽는 사이에 끊기고, 너무 길면 좀비 소켓.
+const DUPLICATE_PENDING_TIMEOUT_MS = 30000;
+
 const app = express();
 // Synchronous-loadable env shim. Client reads window.AGRIA_DEV before the
 // main bundle decides which Storage to bind sid to.
@@ -82,13 +87,19 @@ wss.on('connection', (socket, req) => {
   } catch {}
 
   // Older-wins (production): 같은 sid 의 살아 있는 소켓이 이미 있으면 신규를
-  // 거절. DEV 는 같은 탭 새로고침 race 를 받아 주기 위해 newer-wins 유지.
+  // 즉시 거절하지 않고 「duplicate_pending」 브릿지 페이즈로 사용자 결정을 받음.
+  // DEV 는 같은 탭 새로고침 race 를 받아 주기 위해 newer-wins 유지.
   const player = game.attachPlayer(socket, sid, { allowTakeover: DEV });
   if (!player) {
-    // 4004 = duplicate session. 클라이언트는 자동 재연결 없이 안내 오버레이만.
-    try { socket.close(4004, 'duplicate session'); } catch {}
+    handleDuplicatePending(socket, sid);
     return;
   }
+  bindSession(socket, player);
+});
+
+// 정상 attach 된 소켓에 표준 메시지/close/error 핸들러를 건다. duplicate_pending
+// → force_takeover 경로에서도 takeover 성공 후 동일하게 호출되도록 분리.
+function bindSession(socket, player) {
   try { socket.send(JSON.stringify({ type: 'server_info', version: SERVER_VERSION })); } catch {}
 
   socket.on('message', async (data) => {
@@ -111,7 +122,56 @@ wss.on('connection', (socket, req) => {
   // NOT detach the now-active session. Compare object identity, not id.
   socket.on('close', () => { if (player.socket === socket) game.detachPlayer(player.id); });
   socket.on('error', () => { if (player.socket === socket) game.detachPlayer(player.id); });
-});
+}
+
+// 같은 sid 의 살아 있는 소켓이 이미 있을 때 호출. 직전 커밋은 즉시 close(4004)
+// 했지만 close 프레임이 종종 1005/1006 으로 mangling 되어 클라이언트가 generic
+// auto-reconnect 분기로 떨어지면서 무한 핑퐁이 발생했다. 이번엔 close 에 의존
+// 하지 않고 「duplicate_pending」 JSON 으로 브릿지 페이즈를 명시해, 사용자가
+// force_takeover/cancel_connect 를 보내야 서버가 행동하도록 바꾼다.
+function handleDuplicatePending(socket, sid) {
+  try { socket.send(JSON.stringify({ type: 'duplicate_pending' })); } catch {}
+
+  const timeout = setTimeout(() => {
+    try { socket.close(4004, 'duplicate session timeout'); } catch {}
+  }, DUPLICATE_PENDING_TIMEOUT_MS);
+  const cleanup = () => { clearTimeout(timeout); };
+
+  const onMessage = (data) => {
+    let msg;
+    try { msg = JSON.parse(data); } catch { return; }
+
+    if (msg?.type === 'force_takeover') {
+      cleanup();
+      socket.off('message', onMessage);
+
+      // 기존 탭에 먼저 통보 — close(4001) 이 1006 으로 mangling 되어도 모달이
+      // 떠서 재연결 정책이 정해지도록. send 는 close 보다 먼저 큐에 들어간다.
+      const existing = game.sidToPlayer.get(sid);
+      if (existing && existing.socket && existing.socket.readyState === 1) {
+        try { existing.socket.send(JSON.stringify({ type: 'kicked_by_other' })); } catch {}
+      }
+
+      const taken = game.attachPlayer(socket, sid, { allowTakeover: true });
+      if (!taken) {
+        try { socket.close(4004, 'takeover failed'); } catch {}
+        return;
+      }
+      bindSession(socket, taken);
+      return;
+    }
+
+    if (msg?.type === 'cancel_connect') {
+      cleanup();
+      socket.off('message', onMessage);
+      try { socket.close(4004, 'cancelled by user'); } catch {}
+    }
+  };
+
+  socket.on('message', onMessage);
+  socket.on('close', cleanup);
+  socket.on('error', cleanup);
+}
 
 server.listen(PORT, () => {
   const tag = DEV ? ' [DEV]' : '';
