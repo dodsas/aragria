@@ -551,6 +551,15 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* 사이드바 안쪽 블록들이 길어 sidebar 의 overflow-y 가 스크롤되더라도
+     ⚙ 설정 버튼이 항상 사이드바 하단에 머무르도록 sticky. sidebar 의
+     overflow-y:auto 가 스크롤 컨테이너라 bottom:0 은 사이드바 기준으로
+     붙는다. background 는 위 스크롤 콘텐츠가 비쳐 보이지 않게 — 사이드바
+     본 색과 동일. */
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-panel);
+  z-index: 1;
 }
 #conn-status.on { color: var(--ok); }
 #conn-status.off { color: var(--danger); }
