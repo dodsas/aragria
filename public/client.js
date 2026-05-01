@@ -1707,14 +1707,21 @@ function makeSpellBtn(name, mpCost, cls, onClick) {
   return btn;
 }
 
+// 직전 렌더의 액션 패드 레벨 — 「레벨이 바뀌었나」 판정 캐시. 같은 레벨 안에서
+// 일어나는 재렌더(MP 회복 status push 등) 는 사용자의 수동 스크롤 위치를 보존
+// 해야 「뒷쪽 마법으로 스와이프하던 도중 우측 끝으로 튕겨」 가 안 일어난다.
+let lastRenderedActionPadLevel = null;
+
 function renderActionPad() {
   const pad = document.getElementById('action-pad');
   if (!pad) return;
+
+  // innerHTML='' 가 scrollLeft 을 0 으로 잃기 전에 캡처. 레벨 fallback 까지
+  // 끝난 뒤 「레벨 바뀌었으면 우측 끝, 그대로면 보존」 을 결정한다.
+  const prevScrollLeft = pad.scrollLeft;
+  const prevLevel = lastRenderedActionPadLevel;
+
   pad.innerHTML = '';
-  // 어떤 분기로 빠지더라도 한 번만 — 가로 스크롤이 우측 끝(↩/최신 카테고리)
-  // 으로 맞춰지도록. rAF 가 같은 tick 의 appendChild 끝난 뒤에 실행되므로
-  // scrollWidth 가 정확하게 잡힌다. 분기마다 return 직전에 부르는 것보다 안전.
-  scrollActionPadToEnd();
   // If current sub-level lost all its targets (last monster died, etc.),
   // gracefully fall back to root rather than rendering an empty pane.
   if (actionPadLevel === 'attack' && attackableTargets().length === 0) actionPadLevel = 'root';
@@ -1723,6 +1730,17 @@ function renderActionPad() {
   if (actionPadLevel === 'magic-targets' && magicTargets().length === 0) {
     actionPadLevel = 'magic-spells';
     if (magicSpells().length === 0) actionPadLevel = 'root';
+  }
+
+  // 레벨 확정 후 스크롤 정책 선택 — 레벨 전환이면 우측 끝(↩/최신 카테고리 노출),
+  // 동일 레벨이면 사용자 위치 그대로 복원. rAF 안에서 적용해 같은 tick 의
+  // appendChild 가 끝난 후 scrollWidth 가 정확하게 잡힌 상태에서 set.
+  const levelChanged = prevLevel !== actionPadLevel;
+  lastRenderedActionPadLevel = actionPadLevel;
+  if (levelChanged) {
+    scrollActionPadToEnd();
+  } else {
+    requestAnimationFrame(() => { pad.scrollLeft = prevScrollLeft; });
   }
 
   if (actionPadLevel === 'root') {

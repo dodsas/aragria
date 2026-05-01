@@ -107,7 +107,7 @@
 
 ### 오버플로 처리 — 가로 스크롤 1줄
 
-`#action-pad` 는 `flex-wrap: nowrap; overflow-x: auto` 로 세팅돼 마법 N 개로 폭이 넘치면 세로 wrap 대신 가로 1줄 스크롤이 된다(모바일에서 더 자연스러운 제스처). `renderActionPad()` 가 매 렌더 직후 `pad.scrollLeft = pad.scrollWidth` 로 우측 끝(↩ 백 버튼·가장 최근 카테고리)이 기본 보이게 맞춘다 — 사용자는 좌측으로 스와이프해 나머지를 본다. `scrollbar-width: none` + `-webkit-scrollbar { display: none }` 으로 스크롤바는 숨김.
+`#action-pad` 는 `flex-wrap: nowrap; overflow-x: auto` 로 세팅돼 마법 N 개로 폭이 넘치면 세로 wrap 대신 가로 1줄 스크롤이 된다(모바일에서 더 자연스러운 제스처). 레벨이 전환된 직후(root → magic-spells 등) 에만 `pad.scrollLeft = pad.scrollWidth` 로 우측 끝(↩ 백 버튼·가장 최근 카테고리)이 기본 보이게 맞추고, **같은 레벨 안에서 일어나는 재렌더**(MP 회복 status push 등) 는 직전 `scrollLeft` 를 그대로 복원해 사용자가 스와이프 중이던 위치를 잃지 않는다 — `lastRenderedActionPadLevel` 가 그 판정의 캐시. `scrollbar-width: none` + `-webkit-scrollbar { display: none }` 으로 스크롤바는 숨김.
 
 (MP 필터로 시전 가능한 마법만 노출되므로 가로 스크롤은 「많이 가졌고 MP 도 충분한 후반 빌드」 의 안전망 — 평소엔 한 줄에 들어간다.)
 
@@ -194,3 +194,4 @@ let actionPadLevel = 'root';
 - 서버 `room_monsters` 페이로드에 `objects` / `players` 추가, 룸 구성 변화 지점에 푸시 호출 보강.
 - 카테고리 버튼은 후보가 있을 때만 노출 — 빈 메뉴 탭을 원천 차단.
 - 마법 폭증으로 액션 패드가 짤리던 문제를 셋 다 적용으로 해소 — (1) MP superscript 분리로 본문 폭 30~40% ↓, (2) `mpCost > currentMp` 마법 필터, (3) 세로 wrap 대신 가로 1줄 스크롤(`flex-wrap: nowrap` + 렌더 직후 `scrollLeft = scrollWidth`).
+- 가로 스크롤 위치가 MP 회복(3 초 주기 status push) 마다 우측 끝으로 튕겨 사용자가 좌측의 「뒷쪽 마법」 을 누르지 못하던 회귀 — 「액션 패드 레벨이 바뀐 렌더에서만」 우측 끝으로 자동 정렬하고, 같은 레벨 안에서의 재렌더는 `scrollLeft` 보존하도록 수정.
