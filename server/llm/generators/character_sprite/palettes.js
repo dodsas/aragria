@@ -20,3 +20,16 @@ export const PALETTES = {
 };
 
 export const PALETTE_NAMES = Object.keys(PALETTES);
+
+// Hair color is independent of palette so a "은발 마법사(silver-haired mage)"
+// stays cloth-toned overall but gets silver hair. Values are kept low-sat to
+// blend with the world's muted tone — no anime neon.
+export const HAIR_COLORS = {
+  black:  '#1a1510',
+  brown:  '#4a2f1a',
+  blonde: '#c8a050',
+  silver: '#b8b8c0',
+  red:    '#8a3a22',
+};
+
+export const HAIR_COLOR_NAMES = Object.keys(HAIR_COLORS);

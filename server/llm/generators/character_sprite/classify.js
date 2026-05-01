@@ -14,10 +14,11 @@
 // into the rendered SVG.
 
 import { callLLM } from '../../index.js';
-import { PALETTE_NAMES } from './palettes.js';
+import { PALETTE_NAMES, HAIR_COLOR_NAMES } from './palettes.js';
 
 const ARCHETYPES = ['warrior', 'mage', 'rogue', 'ranger', 'cleric', 'wanderer'];
 const RACES = ['human', 'elf', 'dwarf', 'half-orc'];
+const GENDERS = ['masculine', 'feminine'];
 const BUILDS = ['slim', 'medium', 'stocky'];
 const HAIRS = ['short', 'long', 'bald'];
 const WEARS = ['none', 'hood', 'helm', 'circlet', 'hat'];
@@ -34,11 +35,13 @@ function buildPrompt(name, description) {
 스키마와 허용 값(반드시 정확한 enum 값만 사용):
 {
   "race": "human" | "elf" | "dwarf" | "half-orc",
+  "gender": "masculine" | "feminine",
   "build": "slim" | "medium" | "stocky",
   "archetype": "warrior" | "mage" | "rogue" | "ranger" | "cleric" | "wanderer",
   "palette": "iron" | "leather" | "cloth" | "bone" | "verdant",
   "head": {
     "hair": "short" | "long" | "bald",
+    "hair_color": "black" | "brown" | "blonde" | "silver" | "red",
     "wear": "none" | "hood" | "helm" | "circlet" | "hat"
   },
   "torso": {
@@ -57,6 +60,8 @@ function buildPrompt(name, description) {
 - palette는 archetype 톤과 맞물리게: warrior=iron, mage=cloth, cleric=bone, ranger=verdant, rogue/wanderer=leather (단 묘사에 색·재질 단서가 있으면 그것 우선)
 - weathering은 폐허·낡은·해진·풍화·녹슨 단서면 2~3, 새것·반짝이는 단서면 0~1, 그 외 1
 - mage 또는 cleric은 robe 권장, warrior는 plate/chain, rogue/ranger/wanderer는 leather
+- gender는 묘사에 명시 단서(여자/여성/소녀/그녀/마녀/female/woman, 남자/남성/소년/그/male/man)가 있으면 따르고, 없으면 masculine 디폴트
+- hair_color는 묘사 단서(금발/blonde, 은발/백발/silver, 빨간머리/red, 갈색/brown) 우선. 단서 없으면 black 디폴트. 머리색은 머리 길이(hair)와 독립적
 
 플레이어 이름: ${name}
 플레이어 묘사: ${description}
@@ -84,11 +89,13 @@ function validateCard(raw) {
   if (!raw || typeof raw !== 'object') return null;
   return {
     race: clamp(raw.race, RACES, 'human'),
+    gender: clamp(raw.gender, GENDERS, 'masculine'),
     build: clamp(raw.build, BUILDS, 'medium'),
     archetype: clamp(raw.archetype, ARCHETYPES, 'wanderer'),
     palette: clamp(raw.palette, PALETTE_NAMES, 'leather'),
     head: {
       hair: clamp(raw.head?.hair, HAIRS, 'short'),
+      hair_color: clamp(raw.head?.hair_color, HAIR_COLOR_NAMES, 'black'),
       wear: clamp(raw.head?.wear, WEARS, 'hood'),
     },
     torso: {
@@ -107,9 +114,9 @@ function validateCard(raw) {
 // Used to detect "the model returned `{}` but we filled everything in" —
 // which happens with smaller free-tier classifiers.
 function isAllDefaults(card) {
-  return card.race === 'human' && card.build === 'medium' &&
+  return card.race === 'human' && card.gender === 'masculine' && card.build === 'medium' &&
     card.archetype === 'wanderer' && card.palette === 'leather' &&
-    card.head.hair === 'short' && card.head.wear === 'hood' &&
+    card.head.hair === 'short' && card.head.hair_color === 'black' && card.head.wear === 'hood' &&
     card.torso.armor === 'leather' && card.torso.cloak === false &&
     card.weapon_main === 'sword' && card.weapon_off === 'none' &&
     card.accent === 'belt-pouch' && card.weathering === 1;
@@ -202,9 +209,27 @@ function classifyFromKeywords(name, desc) {
     has('긴머리', '긴 머리', 'long hair', 'long-haired') ? 'long' :
     'short';
 
+  // 묘사에 직접 단서가 있을 때만 흔한 색을 잡고, 없으면 black 디폴트.
+  // 한국어는 「~머리」 결합형이 많아 substring 매치만으로도 잘 잡힌다.
+  const hair_color =
+    has('금발', 'blonde', 'blond') ? 'blonde' :
+    has('은발', '백발', '흰머리', '회색머리', 'silver hair', 'white hair', 'grey hair', 'gray hair') ? 'silver' :
+    has('빨간머리', '붉은머리', '적발', 'red hair', 'redhead') ? 'red' :
+    has('갈색머리', '갈발', 'brown hair', 'brunette') ? 'brown' :
+    'black';
+
+  // 명시 단서가 있으면 그것을 따르고, 없으면 masculine. 한국어는 「여~/남~」
+  // 접두 직업명이 강한 신호라 「여전사·여마법사·여신관·마녀」 같은 결합형도
+  // 같이 본다.
+  const gender =
+    has('여자', '여성', '소녀', '처녀', '아가씨', '미녀', '여전사', '여마법사', '여마도사',
+        '여기사', '여신관', '여사제', '여궁수', '여도적', '여인', '마녀', '그녀',
+        'female', 'woman', 'girl', 'lady', 'witch') ? 'feminine' :
+    'masculine';
+
   return {
-    race, build, archetype, palette,
-    head: { hair, wear },
+    race, gender, build, archetype, palette,
+    head: { hair, hair_color, wear },
     torso: { armor, cloak },
     weapon_main, weapon_off, accent, weathering,
   };

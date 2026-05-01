@@ -17,44 +17,70 @@
 // Layer order is enforced by compose.js, not by parts.js.
 
 // ----- BODY (legs + torso + arms + hands + neck) ---------------------------
+//
+// Gender variant changes the torso silhouette only — narrower shoulders,
+// pinched waist anchor, and a faint bust contour. Legs / arms / hands stay
+// at the same anchors so weapons and accents still land correctly. The
+// difference is visible but quiet, in line with the rest of the parts lib.
 
 export const BODY = {
-  slim: (p) => `<g>
+  slim: (p, gender) => {
+    const fem = gender === 'feminine';
+    const sL = fem ? 41 : 40, sR = fem ? 59 : 60;
+    const wL = fem ? 40 : 38, wR = fem ? 60 : 62;
+    const bust = fem ? `<path d="M46,60 Q50,62 54,60" fill="none" stroke="${p.outline}" stroke-width="0.4" opacity="0.5"/>` : '';
+    return `<g>
     <path d="M44,92 L42,128 L46,128 L48,95 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
     <path d="M52,95 L54,128 L58,128 L56,92 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
     <ellipse cx="44" cy="130" rx="4" ry="2" fill="${p.leather}" stroke="${p.outline}" stroke-width="0.5"/>
     <ellipse cx="56" cy="130" rx="4" ry="2" fill="${p.leather}" stroke="${p.outline}" stroke-width="0.5"/>
-    <path d="M40,52 Q38,80 42,95 L58,95 Q62,80 60,52 Q55,50 50,50 Q45,50 40,52 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.7"/>
-    <path d="M40,54 Q34,68 32,84 L36,84 Q38,68 44,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
-    <path d="M60,54 Q66,68 68,84 L64,84 Q62,68 56,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
+    <path d="M${sL},52 Q${wL},80 42,95 L58,95 Q${wR},80 ${sR},52 Q55,50 50,50 Q45,50 ${sL},52 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.7"/>
+    <path d="M${sL},54 Q34,68 32,84 L36,84 Q38,68 44,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
+    <path d="M${sR},54 Q66,68 68,84 L64,84 Q62,68 56,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
     <circle cx="34" cy="86" r="2.4" fill="${p.skin}" stroke="${p.outline}" stroke-width="0.5"/>
     <circle cx="66" cy="86" r="2.4" fill="${p.skin}" stroke="${p.outline}" stroke-width="0.5"/>
     <rect x="48" y="42" width="4" height="9" fill="${p.skin}" stroke="${p.outline}" stroke-width="0.4"/>
-  </g>`,
-  medium: (p) => `<g>
+    ${bust}
+  </g>`;
+  },
+  medium: (p, gender) => {
+    const fem = gender === 'feminine';
+    const sL = fem ? 39 : 37, sR = fem ? 61 : 63;
+    const wL = fem ? 36 : 34, wR = fem ? 64 : 66;
+    const bust = fem ? `<path d="M45,62 Q50,65 55,62" fill="none" stroke="${p.outline}" stroke-width="0.4" opacity="0.5"/>` : '';
+    return `<g>
     <path d="M42,92 L40,128 L46,128 L48,95 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
     <path d="M52,95 L54,128 L60,128 L58,92 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
     <ellipse cx="43" cy="130" rx="4.5" ry="2" fill="${p.leather}" stroke="${p.outline}" stroke-width="0.5"/>
     <ellipse cx="57" cy="130" rx="4.5" ry="2" fill="${p.leather}" stroke="${p.outline}" stroke-width="0.5"/>
-    <path d="M37,52 Q34,80 40,95 L60,95 Q66,80 63,52 Q56,50 50,50 Q44,50 37,52 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.7"/>
-    <path d="M37,54 Q30,68 28,86 L33,86 Q35,68 41,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
-    <path d="M63,54 Q70,68 72,86 L67,86 Q65,68 59,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
+    <path d="M${sL},52 Q${wL},80 40,95 L60,95 Q${wR},80 ${sR},52 Q56,50 50,50 Q44,50 ${sL},52 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.7"/>
+    <path d="M${sL},54 Q30,68 28,86 L33,86 Q35,68 41,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
+    <path d="M${sR},54 Q70,68 72,86 L67,86 Q65,68 59,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
     <circle cx="30" cy="86" r="2.6" fill="${p.skin}" stroke="${p.outline}" stroke-width="0.5"/>
     <circle cx="70" cy="86" r="2.6" fill="${p.skin}" stroke="${p.outline}" stroke-width="0.5"/>
     <rect x="47" y="42" width="6" height="9" fill="${p.skin}" stroke="${p.outline}" stroke-width="0.4"/>
-  </g>`,
-  stocky: (p) => `<g>
+    ${bust}
+  </g>`;
+  },
+  stocky: (p, gender) => {
+    const fem = gender === 'feminine';
+    const sL = fem ? 35 : 33, sR = fem ? 65 : 67;
+    const wL = fem ? 32 : 30, wR = fem ? 68 : 70;
+    const bust = fem ? `<path d="M44,64 Q50,67 56,64" fill="none" stroke="${p.outline}" stroke-width="0.4" opacity="0.5"/>` : '';
+    return `<g>
     <path d="M40,92 L38,126 L46,126 L48,95 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
     <path d="M52,95 L54,126 L62,126 L60,92 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
     <ellipse cx="42" cy="128" rx="5" ry="2.2" fill="${p.leather}" stroke="${p.outline}" stroke-width="0.5"/>
     <ellipse cx="58" cy="128" rx="5" ry="2.2" fill="${p.leather}" stroke="${p.outline}" stroke-width="0.5"/>
-    <path d="M33,52 Q30,80 36,95 L64,95 Q70,80 67,52 Q58,50 50,50 Q42,50 33,52 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.7"/>
-    <path d="M33,54 Q26,68 24,86 L29,86 Q31,68 37,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
-    <path d="M67,54 Q74,68 76,86 L71,86 Q69,68 63,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
+    <path d="M${sL},52 Q${wL},80 36,95 L64,95 Q${wR},80 ${sR},52 Q58,50 50,50 Q42,50 ${sL},52 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.7"/>
+    <path d="M${sL},54 Q26,68 24,86 L29,86 Q31,68 37,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
+    <path d="M${sR},54 Q74,68 76,86 L71,86 Q69,68 63,56 Z" fill="${p.cloth}" stroke="${p.outline}" stroke-width="0.6"/>
     <circle cx="26" cy="86" r="2.8" fill="${p.skin}" stroke="${p.outline}" stroke-width="0.5"/>
     <circle cx="74" cy="86" r="2.8" fill="${p.skin}" stroke="${p.outline}" stroke-width="0.5"/>
     <rect x="46" y="42" width="8" height="9" fill="${p.skin}" stroke="${p.outline}" stroke-width="0.4"/>
-  </g>`,
+    ${bust}
+  </g>`;
+  },
 };
 
 // ----- HEAD (race-flavored) ------------------------------------------------
@@ -88,13 +114,18 @@ export const HEAD = {
 };
 
 // ----- HAIR ----------------------------------------------------------------
+//
+// Color comes from HAIR_COLORS (see palettes.js), independent of the body
+// palette — a silver-haired warrior in iron palette and a silver-haired
+// mage in cloth palette both get the same hair fill, only the rest of the
+// figure changes tone.
 
 export const HAIR = {
-  short: (p) => `<g>
-    <path d="M40,22 Q42,16 50,15 Q58,16 60,22 Q60,28 58,30 Q55,25 50,24 Q45,25 42,30 Q40,28 40,22 Z" fill="${p.outline}" opacity="0.85"/>
+  short: (p, color) => `<g>
+    <path d="M40,22 Q42,16 50,15 Q58,16 60,22 Q60,28 58,30 Q55,25 50,24 Q45,25 42,30 Q40,28 40,22 Z" fill="${color}" stroke="${p.outline}" stroke-width="0.3" opacity="0.95"/>
   </g>`,
-  long: (p) => `<g>
-    <path d="M39,22 Q41,15 50,14 Q59,15 61,22 Q62,38 60,48 L58,48 Q60,38 58,30 Q55,25 50,25 Q45,25 42,30 Q40,38 42,48 L40,48 Q38,38 39,22 Z" fill="${p.outline}" opacity="0.85"/>
+  long: (p, color) => `<g>
+    <path d="M39,22 Q41,15 50,14 Q59,15 61,22 Q62,38 60,48 L58,48 Q60,38 58,30 Q55,25 50,25 Q45,25 42,30 Q40,38 42,48 L40,48 Q38,38 39,22 Z" fill="${color}" stroke="${p.outline}" stroke-width="0.3" opacity="0.95"/>
   </g>`,
   bald: () => '',
 };
