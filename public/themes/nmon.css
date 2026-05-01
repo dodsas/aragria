@@ -1,0 +1,28 @@
+/* nmon 테마 — AIX/Linux nmon 단말 모니터 톤.
+   특징:
+   - 순흑 배경 위에 인광녹(phosphor green) 본문 — nmon 의 시그니처.
+   - 패널 헤더는 cyan(#00ffff), 경고는 yellow(#ffff00), 알람은 red(#ff5555).
+   - 모든 색은 xterm 16색 정통 매핑이라 모노스페이스 텍스트와 어울린다.
+*/
+[data-theme="nmon"] {
+  --bg: #000000;
+  --bg-panel: #050505;
+  --bg-elev: #111111;
+  --fg: #00ff00;
+  --fg-dim: #008800;
+  --accent: #00ffff;
+  --accent-soft: #006666;
+  --danger: #ff5555;
+  --ok: #00ff00;
+  --border: #006600;
+
+  /* Text-log highlight palette — nmon 패널별 색 관습에 맞춰 매핑 */
+  --c-room: #00ffff;
+  --c-item: #ff00ff;
+  --c-hp: #00ff00;
+  --c-dmg: #ffff00;
+  --c-dir: #ffffff;
+  --c-player: #00ffff;
+  --c-monster: #ff5555;
+  --c-label: #00aa00;
+}

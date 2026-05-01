@@ -1302,6 +1302,12 @@ const THEMES = [
     desc: '천리안·나우누리',
     swatch: ['#000000', '#000080', '#ffff55', '#55ffff'],
   },
+  {
+    id: 'nmon',
+    name: 'nmon',
+    desc: 'AIX/Linux 모니터',
+    swatch: ['#000000', '#00ff00', '#00ffff', '#ffff00'],
+  },
 ];
 const DEFAULT_THEME = 'default';
 const THEME_KEY = 'aragria.theme';
