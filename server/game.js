@@ -83,7 +83,7 @@ const STARTING_EQUIPMENT = () => ({
 });
 
 const STARTING_INVENTORY = () => ([
-  { id: 'potion_hp', name: '체력 물약', icon: '❦', qty: 3 },
+  { id: 'potion_hp', name: '체력 물약', icon: '❦', qty: 10 },
   { id: 'bread', name: '빵', icon: '⌬', qty: 2 },
   { id: 'rope', name: '밧줄', icon: '∽', qty: 1 },
 ]);
