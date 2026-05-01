@@ -16,6 +16,8 @@ Monsters are declared in `MONSTER_DEFS` (in `server/game.js`). Each entry has:
 | `maxHp` | number | Maximum HP (used for the HP bar denominator).                           |
 | `atk`   | number | Damage rolled on counter-attack (`floor(random*atk) + 1`).              |
 | `hpRegen` | number | Self-regenerated HP per second while `hp < maxHp`. `0` (or omitted) disables regen. |
+| `expReward` | number | EXP granted to the killing-blow player. `0`/missing = no reward. |
+| `drops` | array | `[{ id, chance }]` — independent Bernoulli rolls on kill. The killing-blow player gets each rolled item via `_addToInventory`. See `equipment.md` for the schema and existing drop tables. |
 
 A spawned monster carries a copy of these fields plus a unique `id` and `defId` (the key it was spawned from).
 

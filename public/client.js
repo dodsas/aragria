@@ -823,10 +823,14 @@ function renderStatus(status) {
     const item = status.equipment?.[slot];
     const li = document.createElement('li');
     if (item) {
+      // 능력치는 이름 옆에 같이 붙여 한 줄에 다 보이게 — 별도 컬럼을 두면
+      // 좁은 사이드바에서 가독성이 떨어진다. 슬롯 라벨은 오른쪽에 그대로.
       li.innerHTML = `<span class="icon"></span><span class="name"></span><span class="slot"></span>`;
       li.querySelector('.icon').textContent = item.icon || '·';
-      li.querySelector('.name').textContent = item.name;
+      li.querySelector('.name').textContent = `${item.name}${formatItemStat(item, ' ')}`;
       li.querySelector('.slot').textContent = label;
+      li.dataset.slot = slot;
+      li.title = '클릭해서 해제';
     } else {
       li.className = 'empty';
       li.innerHTML = `<span class="icon">·</span><span class="name">— 비어 있음 —</span><span class="slot"></span>`;
@@ -849,12 +853,27 @@ function renderStatus(status) {
       const li = document.createElement('li');
       li.innerHTML = `<span class="icon"></span><span class="name"></span><span class="qty"></span>`;
       li.querySelector('.icon').textContent = it.icon || '·';
-      li.querySelector('.name').textContent = it.name;
-      li.querySelector('.qty').textContent = it.qty > 1 ? `×${it.qty}` : '';
+      // 장비는 능력치를 이름 옆에, 소비/잡템은 수량을 우측에. 한 줄 그리드를
+      // 보존하면서도 무엇을 보고 있는지 즉시 파악되게.
+      li.querySelector('.name').textContent = `${it.name}${formatItemStat(it, ' ')}`;
+      li.querySelector('.qty').textContent = it.kind === 'equip'
+        ? (it.qty > 1 ? `×${it.qty}` : '')
+        : (it.qty > 1 ? `×${it.qty}` : '');
       if (it.id) li.dataset.itemId = it.id;
+      if (it.kind) li.dataset.kind = it.kind;
+      li.title = it.kind === 'equip' ? '클릭해서 장착' : '클릭해서 사용';
       inventoryEl.appendChild(li);
     }
   }
+}
+
+// 아이템의 attack/defense 보너스를 「+5⚔」 / 「+3🛡」 형식으로 한 토큰화.
+// stat 가 없는 소비 아이템은 빈 문자열 — sep 인자로 prefix 공백 제어.
+function formatItemStat(item, sep = '') {
+  const parts = [];
+  if (item?.attack) parts.push(`+${item.attack}⚔`);
+  if (item?.defense) parts.push(`+${item.defense}🛡`);
+  return parts.length ? `${sep}${parts.join(' ')}` : '';
 }
 
 function renderObjectView(view) {
@@ -1267,12 +1286,33 @@ function setupSidebarResizer() {
 }
 
 // ── Inventory click (event delegation) ──────────────────
+// 장비는 「장착」 으로, 소비/잡템은 「사용」 으로 라우팅. 서버의 useItem 도
+// equip-kind 가 들어오면 자동으로 equip 으로 넘기지만, 클라가 미리 갈래를
+// 정해 두면 echo 라인이 의도와 일치해(「> 장착 …」) 사용자가 헷갈리지 않음.
 inventoryEl.addEventListener('click', (e) => {
   const li = e.target.closest('li[data-item-id]');
   if (!li) return;
   const id = li.dataset.itemId;
-  appendLine(`> use ${id}`, 'line echo');
-  sendCmd(`use ${id}`);
+  const kind = li.dataset.kind;
+  if (kind === 'equip') {
+    appendLine(`> 장착 ${id}`, 'line echo');
+    sendCmd(`equip ${id}`);
+  } else {
+    appendLine(`> use ${id}`, 'line echo');
+    sendCmd(`use ${id}`);
+  }
+});
+
+// ── Equipment slot click → unequip ─────────────────────
+// 슬롯에 장착된 아이템을 한 번 탭/클릭으로 해제해 인벤토리로 돌려놓는다.
+// 빈 슬롯 li(.empty)에는 data-slot 이 안 붙어 있어 매칭되지 않음 — 빈 칸을
+// 눌러도 무반응.
+equipmentEl.addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-slot]');
+  if (!li) return;
+  const slot = li.dataset.slot;
+  appendLine(`> 해제 ${slot}`, 'line echo');
+  sendCmd(`unequip ${slot}`);
 });
 
 function setupDpad() {

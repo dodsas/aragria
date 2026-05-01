@@ -397,6 +397,14 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
 }
 .status-block li[data-item-id]:hover { background: var(--bg-elev); }
 .status-block li[data-item-id]:active { background: var(--accent-soft); }
+/* 장착된 장비 슬롯은 클릭해 해제 — 같은 hover/active 어포던스 적용. */
+.status-block li[data-slot] {
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.1s;
+}
+.status-block li[data-slot]:hover { background: var(--bg-elev); }
+.status-block li[data-slot]:active { background: var(--accent-soft); }
 
 /* ── Character stats (level / hp / mp / exp) ──────────── */
 #character-stats { display: grid; gap: 4px; }

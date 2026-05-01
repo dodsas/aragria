@@ -35,6 +35,9 @@ const MONSTER_DEFS = {
     desc: '작고 교활한 눈빛의 녹색 생명체. 녹슨 단검을 들고 있다.',
     hp: 20, maxHp: 20, atk: 5, hpRegen: 1,
     expReward: 30,
+    // 처치 시 각 엔트리 별 chance(0~1) 만큼 인벤토리로 자동 지급. 순서·중복
+    // 무관 — 각 drop 은 독립 베르누이 시행. equipment.md 드랍 매트릭스 참조.
+    drops: [{ id: 'goblin_dagger', chance: 0.10 }],
   },
   skeleton: {
     tier: 1,
@@ -43,6 +46,10 @@ const MONSTER_DEFS = {
     desc: '낡은 갑옷을 입은 뼈만 남은 전사. 텅 빈 눈구멍에서 붉은 빛이 흔들린다.',
     hp: 35, maxHp: 35, atk: 8, hpRegen: 1,
     expReward: 60,
+    drops: [
+      { id: 'bone_helmet', chance: 0.08 },
+      { id: 'bone_sword',  chance: 0.05 },
+    ],
   },
   dragon: {
     tier: 2,
@@ -51,6 +58,10 @@ const MONSTER_DEFS = {
     desc: '숲 속 검은 제단에서 깨어난 비룡. 그을음으로 새카만 비늘 사이로 노란 눈이 어둠을 가른다.',
     hp: 120, maxHp: 120, atk: 18, hpRegen: 3,
     expReward: 800,
+    drops: [
+      { id: 'dragon_scale', chance: 0.06 },
+      { id: 'dragon_fang',  chance: 0.04 },
+    ],
   },
   red_dragon: {
     tier: 2,
@@ -59,6 +70,10 @@ const MONSTER_DEFS = {
     desc: '부서진 사당에 둥지를 튼 비룡. 비늘은 잿불처럼 붉고, 콧김에서 마른 연기가 새어나온다.',
     hp: 100, maxHp: 100, atk: 22, hpRegen: 3,
     expReward: 600,
+    drops: [
+      { id: 'flame_cloak', chance: 0.06 },
+      { id: 'flame_blade', chance: 0.04 },
+    ],
   },
 };
 
@@ -194,18 +209,54 @@ function spawnMonster(defId) {
   };
 }
 
+// 모든 아이템(소비/장비/잡템)의 단일 정의 사전. 인벤토리·장비 슬롯에는 이
+// 정의의 스냅샷(makeItem)이 들어가 — ITEM_DEFS 의 stat 가 나중에 바뀌어도
+// 이미 든 아이템의 능력치는 그대로 유지된다(보존성을 의도). 새 아이템은
+// 여기에 한 줄 추가하고 equipment.md 에 등록.
+//   kind: 'equip' | 'consume' | 'misc'
+//   slot: 'head' | 'body' | 'weapon' | 'offhand' | 'feet'  (equip 만)
+//   attack / defense: equip 의 능력치 보너스(없으면 0).
+const ITEM_DEFS = {
+  // 소비/잡템
+  potion_hp: { id: 'potion_hp', name: '체력 물약', icon: '❦', kind: 'consume' },
+  bread:     { id: 'bread',     name: '빵',        icon: '⌬', kind: 'consume' },
+  rope:      { id: 'rope',      name: '밧줄',      icon: '∽', kind: 'misc' },
+
+  // 시작 장비
+  short_sword: { id: 'short_sword', name: '단검',       icon: '†', kind: 'equip', slot: 'weapon', attack: 5 },
+  tunic:       { id: 'tunic',       name: '낡은 튜닉',  icon: '⛊', kind: 'equip', slot: 'body',   defense: 1 },
+  boots:       { id: 'boots',       name: '가죽 부츠',  icon: '⛢', kind: 'equip', slot: 'feet',   defense: 1 },
+
+  // 몬스터 드랍 — 등급은 티어에 비례. 능력치는 시작 장비 대비 점진적.
+  goblin_dagger: { id: 'goblin_dagger', name: '고블린의 단검',     icon: '⚔',  kind: 'equip', slot: 'weapon', attack: 8 },
+  bone_helmet:   { id: 'bone_helmet',   name: '뼈 투구',           icon: '⛑',  kind: 'equip', slot: 'head',   defense: 3 },
+  bone_sword:    { id: 'bone_sword',    name: '뼈 검',             icon: '🦴', kind: 'equip', slot: 'weapon', attack: 11 },
+  dragon_scale:  { id: 'dragon_scale',  name: '비룡 비늘 갑옷',    icon: '⛉',  kind: 'equip', slot: 'body',   defense: 12 },
+  dragon_fang:   { id: 'dragon_fang',   name: '비룡 송곳니 검',    icon: '🗡', kind: 'equip', slot: 'weapon', attack: 18 },
+  flame_cloak:   { id: 'flame_cloak',   name: '불꽃 망토',         icon: '🜲', kind: 'equip', slot: 'body',   defense: 10 },
+  flame_blade:   { id: 'flame_blade',   name: '불꽃 검',           icon: '🔥', kind: 'equip', slot: 'weapon', attack: 16 },
+};
+
+// 정의의 스냅샷 한 벌을 만들어 player 인벤토리/장비 슬롯에 들어갈 수 있게.
+// 펼친 복사라 나중에 ITEM_DEFS 가 바뀌어도 기존 보유분의 능력치는 영향 없음.
+function makeItem(id, qty = 1) {
+  const def = ITEM_DEFS[id];
+  if (!def) return null;
+  return { ...def, qty };
+}
+
 const STARTING_EQUIPMENT = () => ({
   head: null,
-  body: { id: 'tunic', name: '낡은 튜닉', icon: '⛊' },
-  weapon: { id: 'short_sword', name: '단검', icon: '†' },
+  body: makeItem('tunic'),
+  weapon: makeItem('short_sword'),
   offhand: null,
-  feet: { id: 'boots', name: '가죽 부츠', icon: '⛢' },
+  feet: makeItem('boots'),
 });
 
 const STARTING_INVENTORY = () => ([
-  { id: 'potion_hp', name: '체력 물약', icon: '❦', qty: 10 },
-  { id: 'bread', name: '빵', icon: '⌬', qty: 2 },
-  { id: 'rope', name: '밧줄', icon: '∽', qty: 1 },
+  makeItem('potion_hp', 10),
+  makeItem('bread', 2),
+  makeItem('rope', 1),
 ]);
 
 const ITEM_USE = {
@@ -363,6 +414,56 @@ export class Game {
     const killingBlow = monster.hp === 0 && hpBefore > 0;
     if (killingBlow) monster.dead = true;
     return { hpBefore, killingBlow };
+  }
+
+  // 장비 슬롯들의 총 공격/방어 합. 능력치 없는 슬롯은 0 으로 떨어져 안전.
+  // 매 공격마다 호출되지만 5개 슬롯 순회라 오버헤드 무시 수준.
+  _totalAttack(player) {
+    let a = 0;
+    for (const k of Object.keys(player.equipment)) {
+      const it = player.equipment[k];
+      if (it?.attack) a += it.attack;
+    }
+    return a;
+  }
+  _totalDefense(player) {
+    let d = 0;
+    for (const k of Object.keys(player.equipment)) {
+      const it = player.equipment[k];
+      if (it?.defense) d += it.defense;
+    }
+    return d;
+  }
+
+  // 인벤토리에 아이템을 더한다. 같은 id 가 이미 있으면 qty 누적, 없으면
+  // 새 엔트리로 push. 장비도 일단 인벤토리에 들어가 — 곧바로 장착되지
+  // 않는다(equip 명령 또는 모바일 인벤토리 클릭으로 사용자가 직접 장착).
+  _addToInventory(player, item) {
+    if (!item) return;
+    const inc = item.qty || 1;
+    const existing = player.inventory.find(it => it.id === item.id);
+    if (existing) {
+      existing.qty = (existing.qty || 1) + inc;
+      return;
+    }
+    // 새 엔트리는 정의 스냅샷을 그대로 — 능력치(`attack`/`defense`)도 함께
+    // 복사돼 인벤토리 표시·장착 시점 능력치가 즉시 정확.
+    player.inventory.push({ ...item, qty: inc });
+  }
+
+  // 처치 시 몬스터 정의의 drops 를 베르누이 시행으로 굴려 인벤토리로 지급.
+  // 마지막 일격을 가한 한 명만 호출자(killing blow path)에서 받게 되어 있어
+  // 킬스틸·드랍 분배 정책이 자연스럽게 통일된다(monster.md / equipment.md).
+  _rollDrops(player, defId) {
+    const def = MONSTER_DEFS[defId];
+    const drops = def?.drops || [];
+    for (const d of drops) {
+      if (Math.random() >= d.chance) continue;
+      const item = makeItem(d.id, d.qty || 1);
+      if (!item) continue;
+      this._addToInventory(player, item);
+      this.send(player, { type: 'system', text: `★ ${item.name} 획득!` });
+    }
   }
 
   // 처치 보상으로 경험치를 지급하고 누적 경험치가 다음 레벨 임계를 넘으면
@@ -803,6 +904,10 @@ export class Game {
       case 'use':
       case '사용': case '사용하다': case '써': case '쓰다': case '먹다':
         return this.useItem(player, arg);
+      case 'equip': case '장착': case '장비': case '입다': case '끼다':
+        return this.equip(player, arg);
+      case 'unequip': case '해제': case '벗다': case '벗기':
+        return this.unequip(player, arg);
       case '전직': case '전직하다': case 'class': case 'job': case 'change-class':
         return this.changeClass(player, arg);
       case 'cast': case '시전': case '시전하다': case '마법': {
@@ -815,7 +920,7 @@ export class Game {
       }
       case 'help':
       case '도움말': case '도움': case '명령어': case '명령':
-        return this.send(player, { type: 'text', text: '명령: 보기 [대상], 이동 <방향>, 공격 <대상/플레이어>, 말 <내용>, 사용 <아이템>, 전직 <직업>, <마법명> <대상>, 도움말' });
+        return this.send(player, { type: 'text', text: '명령: 보기 [대상], 이동 <방향>, 공격 <대상/플레이어>, 말 <내용>, 사용 <아이템>, 장착 <장비>, 해제 <슬롯>, 전직 <직업>, <마법명> <대상>, 도움말' });
       default:
         if (['north','south','east','west','n','s','e','w','북','남','동','서','북쪽','남쪽','동쪽','서쪽'].includes(cmd)) {
           return this.move(player, cmd);
@@ -1055,6 +1160,11 @@ export class Game {
       return;
     }
     const item = player.inventory[idx];
+    // 장비 아이템에 `use` 가 들어오면 자연스럽게 장착으로 라우팅 — 텍스트
+    // 입력 사용자가 `use 뼈 검` 처럼 친근한 동사를 써도 통하게.
+    if (item.kind === 'equip') {
+      return this.equip(player, item.id);
+    }
     const handler = ITEM_USE[item.id];
     if (!handler) {
       this.send(player, { type: 'system', text: `${item.name}은(는) 지금 사용할 수 없습니다.` });
@@ -1080,6 +1190,73 @@ export class Game {
         if (foe) this.pushCombat(player, foe, 'player');
       }
     }
+  }
+
+  // 장비 슬롯과 인벤토리 사이에서 한 칸을 옮긴다. 같은 슬롯에 이미 장비가
+  // 있으면 그것을 인벤토리로 떨궈 1:1 스왑(개별 명령으로 먼저 해제할 필요
+  // 없음). qty>1 인 인벤토리 엔트리는 1만 빠지고 나머지는 그대로 남아
+  // 같은 종류 여러 장을 보관해도 일관되게 동작.
+  equip(player, raw) {
+    const arg = String(raw || '').trim();
+    if (!arg) {
+      return this.send(player, { type: 'system', text: '장착할 장비 이름을 지정하세요.' });
+    }
+    const idx = player.inventory.findIndex(it =>
+      it.kind === 'equip' && (
+        it.id === arg || it.name === arg || (arg.length >= 2 && it.name.includes(arg))
+      )
+    );
+    if (idx === -1) {
+      return this.send(player, { type: 'system', text: `'${arg}' 장비를 가지고 있지 않습니다.` });
+    }
+    const src = player.inventory[idx];
+    const slot = src.slot;
+    if (!slot || !(slot in player.equipment)) {
+      return this.send(player, { type: 'system', text: `${src.name}은(는) 장착할 슬롯이 없습니다.` });
+    }
+    // 인벤토리에서 1 빼기 — 다 떨어지면 엔트리 제거.
+    if ((src.qty || 1) > 1) src.qty -= 1;
+    else player.inventory.splice(idx, 1);
+    // 장비 슬롯에 ITEM_DEFS 의 새 단일-qty 스냅샷을 넣는다(인벤토리 원본과
+    // 분리해 추후 변동 격리). 기존 장비는 인벤토리로 환원.
+    const previous = player.equipment[slot];
+    player.equipment[slot] = makeItem(src.id);
+    if (previous) this._addToInventory(player, previous);
+    this.send(player, { type: 'text', text: `${src.name}을(를) 장착했다.` });
+    this.pushStatus(player);
+  }
+
+  // 슬롯명("무기"/"head" 등) 또는 현재 장착 중인 아이템 이름으로 해당 슬롯을
+  // 비워 인벤토리로 되돌린다. 빈 슬롯에 호출하면 안내 라인.
+  unequip(player, raw) {
+    const arg = String(raw || '').trim();
+    const SLOT_ALIASES = {
+      head: 'head', body: 'body', weapon: 'weapon', offhand: 'offhand', feet: 'feet',
+      '머리': 'head', '몸': 'body', '몸통': 'body',
+      '무기': 'weapon', '보조': 'offhand', '발': 'feet',
+    };
+    let slot = SLOT_ALIASES[arg.toLowerCase()] || SLOT_ALIASES[arg] || null;
+    if (!slot && arg) {
+      // 슬롯 키가 아니면 장착품 이름으로 매칭 시도.
+      for (const [s, item] of Object.entries(player.equipment)) {
+        if (!item) continue;
+        if (item.id === arg || item.name === arg || (arg.length >= 2 && item.name.includes(arg))) {
+          slot = s;
+          break;
+        }
+      }
+    }
+    if (!slot) {
+      return this.send(player, { type: 'system', text: '해제할 슬롯/아이템을 지정하세요. (머리/몸통/무기/보조/발)' });
+    }
+    const item = player.equipment[slot];
+    if (!item) {
+      return this.send(player, { type: 'system', text: '해당 슬롯은 비어 있습니다.' });
+    }
+    player.equipment[slot] = null;
+    this._addToInventory(player, item);
+    this.send(player, { type: 'text', text: `${item.name}을(를) 해제했다.` });
+    this.pushStatus(player);
   }
 
   // Server-authoritative cooldown — see command.md. During cooldown the attack
@@ -1162,8 +1339,11 @@ export class Game {
     // visible during a fight is noisy.
     this.send(player, { type: 'view', view: null });
 
-    const hasWeapon = !!player.equipment.weapon;
-    const dmgOut = Math.floor(Math.random() * 8) + (hasWeapon ? 8 : 3);
+    // 기본 공격은 base 3 + 모든 장비의 attack 합 + random(0..7). 무기를
+    // 안 든 상태에서도 base 3 + random 으로 빈손 잽이 가능. 장비 없을 때의
+    // 옛 (3) / 시작 단검 (8) baseline 은 ITEM_DEFS.short_sword.attack=5 로
+    // 그대로 재현된다.
+    const dmgOut = Math.floor(Math.random() * 8) + 3 + this._totalAttack(player);
     const { killingBlow } = this.applyMonsterDamage(target, dmgOut);
 
     this.seg(player, [
@@ -1216,7 +1396,10 @@ export class Game {
       player.combatTargetId = null;
       // 죽은 몬스터를 룸 몬스터 패널에서 즉시 제거.
       this._pushRoomMonsters(roomId);
-      // 처치 보상은 마지막 일격을 가한 한 명만. _grantExp 가 레벨업·푸시까지 처리.
+      // 처치 보상은 마지막 일격을 가한 한 명만 — 경험치와 드랍 모두 동일 정책.
+      // 드랍 먼저 굴려 인벤토리를 갱신한 뒤 _grantExp 가 마무리 pushStatus 를
+      // 한 번에 보내도록 — 같은 틱에 push 가 두 번 나가는 걸 피하기 위해.
+      this._rollDrops(player, target.defId);
       const expReward = MONSTER_DEFS[target.defId]?.expReward || 0;
       if (expReward > 0) this._grantExp(player, expReward);
       if (killStealVictimName) {
@@ -1237,7 +1420,10 @@ export class Game {
     }
 
     // Counter-attack only retaliates against the player who landed this hit.
-    const dmgIn = Math.floor(Math.random() * target.atk) + 1;
+    // 방어구의 defense 합으로 감산 — 갑옷이 의미 있게 작동하도록. 최소 1 보장
+    // (방어가 충분히 높아도 「쓰다듬는 한 대」는 들어와 stalemate 방지).
+    const rawDmg = Math.floor(Math.random() * target.atk) + 1;
+    const dmgIn = Math.max(1, rawDmg - this._totalDefense(player));
     player.hp = Math.max(0, player.hp - dmgIn);
     this.seg(player, [
       { text: target.name, cls: 'monster-name' },
@@ -1416,8 +1602,9 @@ export class Game {
       return;
     }
 
-    // 마법으로도 반격은 받는다 — attack 과 동일.
-    const dmgIn = Math.floor(Math.random() * target.atk) + 1;
+    // 마법으로도 반격은 받는다 — attack 의 방어 감산 공식 그대로.
+    const rawDmgIn = Math.floor(Math.random() * target.atk) + 1;
+    const dmgIn = Math.max(1, rawDmgIn - this._totalDefense(player));
     player.hp = Math.max(0, player.hp - dmgIn);
     this.seg(player, [
       { text: target.name, cls: 'monster-name' },
@@ -1452,8 +1639,8 @@ export class Game {
     // when the fight actually starts.
     this.send(attacker, { type: 'view', view: null });
 
-    const hasWeapon = !!attacker.equipment.weapon;
-    const dmgOut = Math.floor(Math.random() * 8) + (hasWeapon ? 8 : 3);
+    // PvP 도 PvE 와 같은 공격 공식 — base 3 + 장비 attack 합 + random.
+    const dmgOut = Math.floor(Math.random() * 8) + 3 + this._totalAttack(attacker);
     const { killingBlow } = this.applyPlayerDamage(target, dmgOut);
 
     this.seg(attacker, [
