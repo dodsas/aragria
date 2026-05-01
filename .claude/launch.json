@@ -2,7 +2,7 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "aragria",
+      "name": "agria",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["start"],
       "port": 3000,

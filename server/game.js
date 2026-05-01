@@ -716,7 +716,7 @@ export class Game {
       // 자동 등록을 점화한다. 분류기 + 합성기 한 사이클(보통 1~3초) 후 플레이어가
       // 광장에 도착한다. 그 사이 사용자는 빈 화면을 보지 않도록 한 줄짜리 진입
       // 안내만 시스템 텍스트로 흘려준다.
-      this.send(player, { type: 'system', text: '아라그리아에 진입하는 중...' });
+      this.send(player, { type: 'system', text: '아그리아에 진입하는 중...' });
       this._autoRegisterStub(player);
     }
     return player;
@@ -808,7 +808,7 @@ export class Game {
     player.registered = true;
     player.roomId = 'square';
 
-    this.send(player, { type: 'system', text: `${cleanName}, 아라그리아에 오신 것을 환영합니다.` });
+    this.send(player, { type: 'system', text: `${cleanName}, 아그리아에 오신 것을 환영합니다.` });
     this.pushStatus(player);
     this.describeRoom(player);
     this.broadcastRoom(player.roomId, { type: 'text', text: `${cleanName}님이 이곳에 도착했습니다.` }, player.id);

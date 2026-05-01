@@ -1,4 +1,4 @@
-// SVG part library for Aragria character composition.
+// SVG part library for Agria character composition.
 //
 // Every part is a function `(p) => string` where `p` is a palette object
 // from palettes.js. The string is the inner markup of one or more `<g>`

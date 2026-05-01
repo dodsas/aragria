@@ -1,9 +1,9 @@
 ---
-description: Kill the running Aragria dev server and start a fresh one in the background.
+description: Kill the running Agria dev server and start a fresh one in the background.
 allowed-tools: Bash
 ---
 
-Restart the Aragria dev server. Steps:
+Restart the Agria dev server. Steps:
 
 1. Kill anything listening on the configured port (default 3000):
    `PORT="${PORT:-3000}"; lsof -ti:"$PORT" | xargs kill -9 2>/dev/null; sleep 0.1`
@@ -15,7 +15,7 @@ Restart the Aragria dev server. Steps:
    - Dev mode (`DEV=1`) relaxes per-IP connection rate limit and switches client sid to `sessionStorage` so multiple tabs are independent players for testing.
    - To restart in production mode instead (only if explicitly asked), drop the `DEV=1` prefix.
 3. Confirm boot by polling the background output instead of a fixed sleep — Node typically prints the listen line within 200–400 ms:
-   `for i in $(seq 1 20); do grep -q "Aragria server listening" "<output_file>" 2>/dev/null && break; sleep 0.05; done && cat "<output_file>"`
+   `for i in $(seq 1 20); do grep -q "Agria server listening" "<output_file>" 2>/dev/null && break; sleep 0.05; done && cat "<output_file>"`
    - Substitute `<output_file>` with the path the background-task tool returned.
    - Cap is 1 s (20 × 50 ms). If still not booted, surface the file contents so any error (EADDRINUSE, syntax error, etc.) is visible.
 4. Report the result in one line including the `[DEV]` tag if present. Don't tail logs unless something failed.

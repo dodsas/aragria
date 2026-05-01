@@ -1,4 +1,4 @@
-/* Aragria 기본 테마 — 따뜻한 양피지 다크 (parchment dark).
+/* Agria 기본 테마 — 따뜻한 양피지 다크 (parchment dark).
    색상 토큰만 정의. 구조/레이아웃은 style.css 에서 관리. */
 [data-theme="default"] {
   --bg: #0e0f12;

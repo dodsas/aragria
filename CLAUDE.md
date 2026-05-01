@@ -2,9 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project: Aragria
+## Project: Agria
 
-Aragria is a browser-based **text-MUD style multiplayer web game**.
+Agria is a browser-based **text-MUD style multiplayer web game**.
 
 ### Product spec (authoritative)
 

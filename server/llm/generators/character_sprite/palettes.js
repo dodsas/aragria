@@ -1,4 +1,4 @@
-// Aragria character palettes — fixed in code so the LLM (or keyword fallback)
+// Agria character palettes — fixed in code so the LLM (or keyword fallback)
 // can only pick a name; it never names raw colors. Anything that ships
 // requires editing this file, which keeps the cohort visually coherent.
 //

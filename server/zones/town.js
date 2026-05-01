@@ -3,11 +3,11 @@
 
 export default {
   id: 'town',
-  name: '아라그리아 시가지',
+  name: '아그리아 시가지',
 
   rooms: {
     square: {
-      name: '아라그리아 광장',
+      name: '아그리아 광장',
       desc: '돌로 포장된 넓은 광장이다. 분수에서 물이 흐르고, 북쪽으로 시장이, 동쪽으로 신전이 보인다.',
       exits: { north: 'market', east: 'temple' },
       objects: ['fountain', 'crystal'],
@@ -36,7 +36,7 @@ export default {
       desc: '광장 한가운데 박힌 푸른 수정. 안쪽에서 빛이 맥박처럼 뛴다.',
       view: {
         icon: '◆',
-        title: '아라그리아의 수정',
+        title: '아그리아의 수정',
         tags: ['신성', '고대유물'],
         stats: [
           { label: '마나 공명', value: 87, max: 100 },

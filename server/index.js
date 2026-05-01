@@ -22,11 +22,11 @@ const SERVER_VERSION = Date.now();
 const DEV = !!process.env.DEV;
 
 const app = express();
-// Synchronous-loadable env shim. Client reads window.ARAGRIA_DEV before the
+// Synchronous-loadable env shim. Client reads window.AGRIA_DEV before the
 // main bundle decides which Storage to bind sid to.
 app.get('/env.js', (_req, res) => {
   res.type('application/javascript');
-  res.send(`window.ARAGRIA_DEV = ${DEV};`);
+  res.send(`window.AGRIA_DEV = ${DEV};`);
 });
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -109,5 +109,5 @@ wss.on('connection', (socket, req) => {
 
 server.listen(PORT, () => {
   const tag = DEV ? ' [DEV]' : '';
-  console.log(`Aragria server listening on http://localhost:${PORT}${tag}`);
+  console.log(`Agria server listening on http://localhost:${PORT}${tag}`);
 });

@@ -37,11 +37,11 @@ let backoff = 500;
 // in-world player object (HP, kill-steal block, room) within the server's
 // reconnect grace. In production we use localStorage so all tabs share one
 // identity (newer-wins force-takeover keeps single-character semantics). In
-// dev (window.ARAGRIA_DEV) we use sessionStorage so each tab gets its own sid
+// dev (window.AGRIA_DEV) we use sessionStorage so each tab gets its own sid
 // — needed to drive multiple players from one machine for testing.
 function getSid() {
-  const KEY = 'aragria.sid';
-  const store = window.ARAGRIA_DEV ? sessionStorage : localStorage;
+  const KEY = 'agria.sid';
+  const store = window.AGRIA_DEV ? sessionStorage : localStorage;
   let sid = '';
   try { sid = store.getItem(KEY) || ''; } catch {}
   if (!sid) {
@@ -1324,7 +1324,7 @@ function setupSidebarResizer() {
   const MIN_SIDEBAR = 200;
   const MIN_VIEWPORT = 240;
   const MOBILE_BP = 768; // style.css 의 @media (max-width: 768px) 와 동기.
-  const STORAGE_KEY = 'aragria.sidebarWidth';
+  const STORAGE_KEY = 'agria.sidebarWidth';
 
   // 사용자가 의도한 사이드바 폭(드래그로 정한 값 또는 저장값). resize 시
   // 매번 다시 적용하지만, 사용자의 원래 의도는 그대로 보존해 창을 다시
@@ -1654,7 +1654,7 @@ const THEMES = [
   },
 ];
 const DEFAULT_THEME = 'default';
-const THEME_KEY = 'aragria.theme';
+const THEME_KEY = 'agria.theme';
 
 function getSavedTheme() {
   try {

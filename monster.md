@@ -1,6 +1,6 @@
 # Monster System
 
-This document is the contract for how monsters are defined, spawned, and respawned in Aragria. Game logic lives in `server/game.js`; tunable knobs live in `server/config.js`.
+This document is the contract for how monsters are defined, spawned, and respawned in Agria. Game logic lives in `server/game.js`; tunable knobs live in `server/config.js`.
 
 ## Definition
 

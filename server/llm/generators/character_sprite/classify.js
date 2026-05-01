@@ -28,7 +28,7 @@ const ACCENTS = ['rune', 'amulet', 'feather', 'sash', 'belt-pouch', 'none'];
 const WEATHERINGS = [0, 1, 2, 3];
 
 function buildPrompt(name, description) {
-  return `당신은 다크 판타지 텍스트 MUD "Aragria"의 캐릭터 분류기입니다.
+  return `당신은 다크 판타지 텍스트 MUD "Agria"의 캐릭터 분류기입니다.
 플레이어가 입력한 이름과 자유 묘사를 아래 JSON 스키마로만 분류하세요. JSON 외 모든 텍스트(설명·코드 펜스·마크다운·주석)는 절대 포함하지 마세요.
 
 스키마와 허용 값(반드시 정확한 enum 값만 사용):
