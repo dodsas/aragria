@@ -4,8 +4,8 @@
   "main": "server/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server/index.js",
-    "dev": "DEV=1 node --watch server/index.js",
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "dev": "DEV=1 node --env-file-if-exists=.env --watch server/index.js",
     "stop": "pkill -f 'node server/index.js' || true",
     "restart": "npm run stop && sleep 0.5 && npm start"
   },

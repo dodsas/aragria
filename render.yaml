@@ -7,5 +7,24 @@ services:
     branch: develop
     buildCommand: npm ci
     startCommand: npm start
+    # 영속 디스크 — 사용자 계정·캐릭터 스냅샷 저장 위치(data/users.json).
+    # 빈 디스크가 처음 마운트되면 store.js 가 자동으로 빈 상태로 시작한다.
+    disk:
+      name: agria-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
     envVars:
       - key: NODE_VERSION
+      # 네이버 OAuth — 키 발급 후 Render 대시보드에서 값 입력. 비워 두면
+      # /env.js 의 AGRIA_NAVER_LOGIN=false 가 되어 클라가 로그인 버튼을 숨긴다.
+      - key: NAVER_CLIENT_ID
+        sync: false
+      - key: NAVER_CLIENT_SECRET
+        sync: false
+      # 콜백 URL. https 종단(Render) 환경에서는 풀 URL 명시 권장.
+      # 예: https://agria.onrender.com/auth/naver/callback
+      - key: NAVER_CALLBACK_URL
+        sync: false
+      # 프록시 뒤 https 환경에서 세션 쿠키에 Secure 플래그 강제.
+      - key: SESSION_COOKIE_SECURE
+        value: 'true'

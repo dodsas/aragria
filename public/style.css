@@ -830,6 +830,69 @@ body[data-sidebar="open"] #sidebar-toggle::before { content: '‹'; }
   color: #b8d4ec;
 }
 
+/* welcome 모달 안의 네이버 로그인 영역. 등록 폼과 시각적 분리를 위해
+   카드 안의 sub-section 으로 구분선/배경을 살짝 다르게. */
+.welcome-auth {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.welcome-auth-hint {
+  margin: 0 0 10px;
+  font-size: 0.82rem;
+  color: var(--fg-dim);
+  line-height: 1.5;
+}
+.welcome-auth-status {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+.welcome-naver-btn {
+  display: inline-block;
+  background: #03c75a;
+  color: #ffffff;
+  padding: 8px 14px;
+  border-radius: 4px;
+  font-size: 0.92rem;
+  font-weight: bold;
+  text-decoration: none;
+  transition: background 0.12s;
+}
+.welcome-naver-btn:hover { background: #04b552; }
+
+/* 설정 모달의 계정 영역. */
+#settings-account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+#settings-account-name {
+  flex: 1;
+  font-size: 0.9rem;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#settings-logout {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+#settings-logout:hover { color: var(--fg); border-color: var(--accent-soft); }
+
 /* ── Settings overlay ──────────────────────────────────────── */
 #settings-overlay {
   position: fixed;

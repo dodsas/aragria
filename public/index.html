@@ -96,6 +96,11 @@
     <div id="welcome-card">
       <h2>모험가 등록</h2>
       <p class="welcome-hint">아그리아에 처음 들어선 당신의 정보를 알려주세요. 입력한 특징을 바탕으로 전투 시 캐릭터 모습이 그려집니다.</p>
+      <div id="welcome-auth" class="welcome-auth" hidden>
+        <p class="welcome-auth-hint">캐릭터를 영구히 보존하려면 네이버 계정으로 로그인하세요. 다른 디바이스에서 같은 계정으로 들어오면 캐릭터가 그대로 따라옵니다.</p>
+        <a id="welcome-naver-login" class="welcome-naver-btn" href="/auth/naver/login" hidden>네이버로 로그인</a>
+        <p id="welcome-auth-status" class="welcome-auth-status" hidden></p>
+      </div>
       <form id="welcome-form" autocomplete="off">
         <label>
           <span>이름</span>
@@ -137,6 +142,13 @@
       <div class="settings-group">
         <span class="settings-group-label">테마</span>
         <div class="theme-options" id="theme-options"></div>
+      </div>
+      <div class="settings-group" id="settings-account-group" hidden>
+        <span class="settings-group-label">계정</span>
+        <div id="settings-account">
+          <span id="settings-account-name"></span>
+          <button type="button" id="settings-logout">로그아웃</button>
+        </div>
       </div>
       <div id="settings-actions">
         <button type="button" id="settings-close">닫기</button>

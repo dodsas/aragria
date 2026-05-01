@@ -11,6 +11,7 @@ import {
 } from './config.js';
 import { loadZones } from './zones/index.js';
 import { generateCharacterSprite, getDefaultCharacterSprite } from './sprite.js';
+import { saveCharacterFor, getCharacterFor } from './store.js';
 
 let nextPlayerId = 1;
 
@@ -276,6 +277,11 @@ export class Game {
     // same in-world player object so penalties (kill-steal block, low HP,
     // active combat target) survive a socket close.
     this.sidToPlayer = new Map();
+    // naverId → player. 인증된 사용자는 sid 와 무관하게 한 명의 살아 있는
+    // player 객체로 키잉된다. 다른 디바이스에서 같은 계정으로 재로그인 시
+    // 기존 디바이스의 sessionToken 이 회전돼 무효가 되고, 새 디바이스의 WS 가
+    // 들어오는 순간 이 맵이 1:1 단일성을 보장한다.
+    this.naverIdToPlayer = new Map();
     this.roomMonsters = new Map();
     this._spawnMonsters();
     this._startRegenTick();
@@ -503,6 +509,9 @@ export class Game {
       }
     }
     this.pushStatus(player);
+    // 경험치/레벨이 바뀐 사이클의 끝에 한 번만 영속 — store 가 디바운스로 묶어
+    // 같은 틱 안에 여러 번 호출돼도 디스크 I/O 는 한 번.
+    this._persistPlayer(player);
   }
 
   // 광장에서 레벨 10 이상의 novice 만 직업을 바꿀 수 있다. 현재는 마법사 한
@@ -544,6 +553,7 @@ export class Game {
       }
     }
     this.pushStatus(player);
+    this._persistPlayer(player);
   }
 
   // PvP analog to applyMonsterDamage. Same atomicity guarantees: synchronous
@@ -571,7 +581,47 @@ export class Game {
   // generic auto-reconnect 로 떨어지는 무한 루프) 을 원천 차단.
   // allowTakeover=true (DEV): 같은 탭 새로고침에서 옛 소켓이 아직
   // readyState=1 일 때 새 소켓이 받기를 원하므로 newer-wins 유지.
-  attachPlayer(socket, sid, { allowTakeover = false } = {}) {
+  attachPlayer(socket, sid, { allowTakeover = false, auth = null } = {}) {
+    // 인증된 사용자: naverId 키가 sid 보다 우선. 같은 계정의 살아 있는 player
+    // 가 있으면 takeover 정책을 따르고, 없으면 캐릭터 스냅샷을 hydrate.
+    if (auth && auth.naverId) {
+      const existing = this.naverIdToPlayer.get(auth.naverId);
+      if (existing) {
+        if (existing.socket && existing.socket.readyState === 1) {
+          if (!allowTakeover) return null;
+          try { existing.socket.close(4001, 'replaced by newer session'); } catch {}
+        }
+        if (existing.graceTimer) {
+          clearTimeout(existing.graceTimer);
+          existing.graceTimer = null;
+        }
+        existing.disconnectedAt = null;
+        existing.socket = socket;
+        existing.sid = sid || existing.sid;
+        if (sid) this.sidToPlayer.set(sid, existing);
+        if (existing.registered) {
+          this.send(existing, { type: 'system', text: `다시 접속했습니다, ${existing.name}.` });
+          this.pushStatus(existing);
+          this.describeRoom(existing);
+          if (existing.spriteSvg) {
+            this.send(existing, { type: 'character_sprite', playerId: existing.id, svg: existing.spriteSvg });
+          }
+        } else if (existing.generating) {
+          if (REGISTRATION_ENABLED) {
+            this.send(existing, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
+          }
+        } else if (REGISTRATION_ENABLED) {
+          this.send(existing, { type: 'welcome' });
+        } else {
+          this._autoRegisterStub(existing);
+        }
+        return existing;
+      }
+      // 신규 인증 attach. 저장된 캐릭터 스냅샷이 있으면 즉시 월드에 풀어 넣고,
+      // 없으면 등록 모달로 흘려 신규 캐릭터를 만들게 한다.
+      return this._addAuthenticatedPlayer(socket, sid, auth);
+    }
+
     if (sid) {
       const existing = this.sidToPlayer.get(sid);
       if (existing) {
@@ -621,6 +671,68 @@ export class Game {
     return this._addPlayer(socket, sid);
   }
 
+  // 인증된 신규 attach. 저장된 캐릭터 스냅샷이 있으면 player 객체를 그 데이터로
+  // hydrate 해 즉시 등록 상태로 만들고, 없으면 일반 stub 와 동일하게 welcome
+  // 모달로 흘려 보낸다. 등록이 끝나면 _persistPlayer 가 첫 스냅샷을 디스크에 저장.
+  _addAuthenticatedPlayer(socket, sid, auth) {
+    const saved = getCharacterFor(auth.naverId);
+    const player = this._addPlayer(socket, sid, { suppressWelcome: !!saved });
+    player.naverId = auth.naverId;
+    this.naverIdToPlayer.set(auth.naverId, player);
+    if (!saved) return player;
+
+    // hydrate. _addPlayer 가 신규 stub 의 기본값으로 초기화해 둔 필드를
+    // 스냅샷의 값으로 덮어쓴다. 형상이 깨진 옛 스냅샷이 들어와도 누락 필드는
+    // 기본값을 유지하도록 안전하게 spread.
+    player.name = saved.name || '';
+    player.description = saved.description || '';
+    player.klass = saved.klass || 'novice';
+    player.level = saved.level || 1;
+    player.exp = saved.exp || 0;
+    player.maxHp = saved.maxHp || classMaxHp(player.klass, player.level);
+    player.maxMp = saved.maxMp || classMaxMp(player.klass, player.level);
+    player.hp = Math.min(player.maxHp, saved.hp ?? player.maxHp);
+    player.mp = Math.min(player.maxMp, saved.mp ?? player.maxMp);
+    player.equipment = saved.equipment || STARTING_EQUIPMENT();
+    player.inventory = saved.inventory || STARTING_INVENTORY();
+    player.spriteSvg = saved.spriteSvg || null;
+    player.roomId = saved.roomId && ROOMS[saved.roomId] ? saved.roomId : 'square';
+    player.registered = true;
+
+    this.send(player, { type: 'system', text: `${player.name}, 다시 만나서 반갑습니다.` });
+    this.pushStatus(player);
+    this.describeRoom(player);
+    if (player.spriteSvg) {
+      this.send(player, { type: 'character_sprite', playerId: player.id, svg: player.spriteSvg });
+    }
+    this._sendRoomSprites(player);
+    this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 이곳에 도착했습니다.` }, player.id);
+    this._pushRoomMonsters(player.roomId);
+    return player;
+  }
+
+  // 캐릭터 스냅샷을 디스크 스토어에 기록. 인증되지 않은 player 는 영속성 대상이
+  // 아니므로 no-op. 호출자는 「상태가 의미 있게 바뀐 시점」(레벨업·장착·이동·
+  // 재접속·연결 종료) 에서 한 번씩 호출하면 충분 — store 가 디바운스로 묶는다.
+  _persistPlayer(player) {
+    if (!player || !player.naverId || !player.registered) return;
+    saveCharacterFor(player.naverId, {
+      name: player.name,
+      description: player.description,
+      klass: player.klass,
+      level: player.level,
+      exp: player.exp,
+      hp: player.hp,
+      maxHp: player.maxHp,
+      mp: player.mp,
+      maxMp: player.maxMp,
+      equipment: player.equipment,
+      inventory: player.inventory,
+      roomId: player.roomId,
+      spriteSvg: player.spriteSvg,
+    });
+  }
+
   // Defers actual removal by RECONNECT_GRACE_MS so a reconnect with the same
   // sid can resume in-place. The player object remains in `this.players` and
   // therefore in their room's broadcast set during grace; PvP / monster
@@ -630,12 +742,17 @@ export class Game {
     const p = this.players.get(id);
     if (!p || p.disconnectedAt != null) return;
 
+    // 연결 종료 직전 스냅샷 — 같은 디바이스 재접속이든 다른 디바이스 로그인이든
+    // 새 attach 가 이 데이터에서 시작할 수 있도록.
+    this._persistPlayer(p);
+
     // Stubs (not yet registered) have no in-world state worth preserving and
     // no roomId to broadcast departure from. Drop them immediately so a fresh
     // sid'd connect doesn't keep the half-formed record around.
     if (!p.registered) {
       this.players.delete(id);
       if (p.sid) this.sidToPlayer.delete(p.sid);
+      if (p.naverId) this.naverIdToPlayer.delete(p.naverId);
       return;
     }
 
@@ -660,7 +777,7 @@ export class Game {
     }, RECONNECT_GRACE_MS);
   }
 
-  _addPlayer(socket, sid = '') {
+  _addPlayer(socket, sid = '', { suppressWelcome = false } = {}) {
     const id = nextPlayerId++;
     const now = Date.now();
     // Stub player. Sits outside the world (roomId=null) until registerPlayer
@@ -714,6 +831,11 @@ export class Game {
     };
     this.players.set(id, player);
     if (sid) this.sidToPlayer.set(sid, player);
+
+    // suppressWelcome 가 true 면 호출자(_addAuthenticatedPlayer)가 hydrate 후
+    // describeRoom 까지 직접 처리한다. welcome/auto-register 분기는 「stub 채로
+    // 시작하는」 신규 사용자 전용.
+    if (suppressWelcome) return player;
 
     if (REGISTRATION_ENABLED) {
       this.send(player, { type: 'welcome' });
@@ -824,6 +946,8 @@ export class Game {
     // client is keyed by the player's own id for combat-panel lookup.
     if (svg) this.send(player, { type: 'character_sprite', playerId: player.id, svg });
     this._sendRoomSprites(player);
+    // 신규 등록 직후 첫 스냅샷 — 인증된 사용자는 이 시점부터 영속 캐릭터.
+    this._persistPlayer(player);
   }
 
   // Final removal after grace expires (or on respawn-driven cleanup). Same
@@ -832,9 +956,14 @@ export class Game {
   _finalizePlayer(id) {
     const p = this.players.get(id);
     if (!p) return;
+    // grace 가 끝나는 시점이 마지막 영속 보장. 이 시점에 _persistPlayer 가
+    // 호출되지 않으면 detachPlayer 가 남긴 스냅샷이 곧 사라지는 in-memory 상태를
+    // 가리키게 된다 — 추가 호출 비용은 작고 안전.
+    this._persistPlayer(p);
     const fromRoom = p.roomId;
     this.players.delete(id);
     if (p.sid) this.sidToPlayer.delete(p.sid);
+    if (p.naverId) this.naverIdToPlayer.delete(p.naverId);
     this._clearKillStealBlocksAgainst(id, fromRoom);
     this.broadcastRoom(fromRoom, { type: 'text', text: `${p.name}님이 떠났습니다.` });
     this._pushRoomMonsters(fromRoom);
@@ -1128,6 +1257,8 @@ export class Game {
     // (and "사람" lists) reflect the move without waiting for a stray event.
     this._pushRoomMonsters(fromRoom);
     this._pushRoomMonsters(player.roomId);
+    // 위치 보존 — 재접속 시 마지막 방에서 다시 시작하도록.
+    this._persistPlayer(player);
   }
 
   // On room entry, push the cached sprite of every other registered player
@@ -1235,6 +1366,7 @@ export class Game {
     if (previous) this._addToInventory(player, previous);
     this.send(player, { type: 'text', text: `${src.name}을(를) 장착했다.` });
     this.pushStatus(player);
+    this._persistPlayer(player);
   }
 
   // 슬롯명("무기"/"head" 등) 또는 현재 장착 중인 아이템 이름으로 해당 슬롯을
@@ -1268,6 +1400,7 @@ export class Game {
     this._addToInventory(player, item);
     this.send(player, { type: 'text', text: `${item.name}을(를) 해제했다.` });
     this.pushStatus(player);
+    this._persistPlayer(player);
   }
 
   // Server-authoritative cooldown — see command.md. During cooldown the attack

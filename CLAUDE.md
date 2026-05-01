@@ -63,6 +63,7 @@ The server is unaware of modes — WASD is a thin client wrapper that emits the 
 - `class.md` — 직업 시스템(novice/mage), 전직 규칙(광장 + 레벨 10), 레벨/EXP 테이블, 새 직업 추가 절차.
 - `magic.md` — 마법 정의·시전 게이트·element 색 매트릭스·다단어 한국어 spell 입력 파서(`_matchSpellPrefix`), 새 마법 추가 절차.
 - `equipment.md` — 아이템 단일 진실원 ITEM_DEFS·드랍 매트릭스·attack/defense 데미지 공식·equip/unequip 명령·새 아이템 추가 절차.
+- `auth.md` — 네이버 OAuth 로그인·세션 토큰 회전(다른 디바이스 로그인 시 단일성 보장)·캐릭터 영속성(`data/users.json`)·env(NAVER_CLIENT_ID/SECRET, NAVER_CALLBACK_URL, SESSION_COOKIE_SECURE).
 
 ### Commands
 

@@ -15,6 +15,66 @@ const welcomeName = document.getElementById('welcome-name');
 const welcomeDesc = document.getElementById('welcome-desc');
 const welcomeError = document.getElementById('welcome-error');
 const welcomeButton = welcomeForm?.querySelector('button[type=submit]');
+const welcomeAuthEl = document.getElementById('welcome-auth');
+const welcomeNaverBtn = document.getElementById('welcome-naver-login');
+const welcomeAuthStatus = document.getElementById('welcome-auth-status');
+const settingsAccountGroup = document.getElementById('settings-account-group');
+const settingsAccountName = document.getElementById('settings-account-name');
+const settingsLogoutBtn = document.getElementById('settings-logout');
+
+// /auth/me 결과 캐시. null = 비인증, {nickname} = 인증. 첫 페이지 로드와 logout
+// 직후에 갱신된다. 다른 디바이스 로그인으로 세션이 회전돼 WS 가 끊기면 재연결
+// 직전에 다시 fetch 해 UI 상태를 일치시킨다.
+let authState = null;
+async function refreshAuthState() {
+  try {
+    const r = await fetch('/auth/me', { credentials: 'same-origin' });
+    if (r.ok) authState = await r.json();
+    else authState = null;
+  } catch {
+    authState = null;
+  }
+  applyAuthUi();
+}
+function applyAuthUi() {
+  // 환경 자체가 네이버 로그인을 끈 경우(NAVER_CLIENT_ID 미설정) — 등록 모달의
+  // 로그인 영역을 숨겨 死버튼이 안 뜨도록.
+  const naverEnabled = !!window.AGRIA_NAVER_LOGIN;
+  if (welcomeAuthEl) welcomeAuthEl.hidden = !naverEnabled;
+  if (!naverEnabled) {
+    if (settingsAccountGroup) settingsAccountGroup.hidden = true;
+    return;
+  }
+  if (authState && authState.ok) {
+    if (welcomeNaverBtn) welcomeNaverBtn.hidden = true;
+    if (welcomeAuthStatus) {
+      welcomeAuthStatus.hidden = false;
+      welcomeAuthStatus.textContent = `${authState.nickname || '계정'} 으로 로그인됨`;
+    }
+    if (settingsAccountGroup) {
+      settingsAccountGroup.hidden = false;
+      if (settingsAccountName) settingsAccountName.textContent = authState.nickname || '계정';
+    }
+  } else {
+    if (welcomeNaverBtn) welcomeNaverBtn.hidden = false;
+    if (welcomeAuthStatus) welcomeAuthStatus.hidden = true;
+    if (settingsAccountGroup) settingsAccountGroup.hidden = true;
+  }
+}
+
+if (settingsLogoutBtn) {
+  settingsLogoutBtn.addEventListener('click', async () => {
+    settingsLogoutBtn.disabled = true;
+    settingsLogoutBtn.textContent = '로그아웃 중…';
+    try {
+      await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
+    } catch {}
+    // 로그아웃은 세션 토큰을 무효화 — WS 가 익명으로 재연결되도록 페이지 리로드.
+    location.reload();
+  });
+}
+
+refreshAuthState();
 
 // Cache of per-player AI-generated sprite SVGs, keyed by player id. Server
 // pushes via `character_sprite` messages on registration completion and on
