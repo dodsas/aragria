@@ -1,3 +1,5 @@
+import { makeThrottle } from './throttle.js';
+
 const logEl = document.getElementById('log');
 const objectViewEl = document.getElementById('object-view');
 const combatViewEl = document.getElementById('combat-view');
@@ -100,9 +102,12 @@ let suppressReconnect = false;
 // 직전까지 true. 모달을 자동으로 정리하는 트리거.
 let awaitingTakeover = false;
 
-function sendWS(obj) {
-  try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); } catch {}
-}
+// 클라 → 서버 메시지의 최소 송신 간격 게이트. 정책·구현은 throttle.js 단일
+// 진실원이며 이 파일은 ws 변수 한 개만 주입한다. closure 변수라 재연결로 ws 가
+// 바뀌어도 같은 sender 가 새 소켓을 본다(getSocket 콜백이 매 호출마다 ws 를 다시
+// 읽음). 100ms 이내 연쇄 송신은 silent drop — 키 auto-repeat / 버튼 연타가
+// 서버 token bucket 에 도달하기 전에 잘려 나가도록.
+const sendWS = makeThrottle({ getSocket: () => ws });
 
 // Persistent session id. Lets a refresh / brief disconnect resume the same
 // in-world player object (HP, kill-steal block, room) within the server's
@@ -680,18 +685,29 @@ function makeCombatActor(actor, isFoe, isFallen, isHurt, killerName = null, kind
   root.appendChild(sprite);
   root.appendChild(shadow);
   root.appendChild(nameRow);
-  root.appendChild(makeCombatBar(actor, isFoe, isFallen));
+  root.appendChild(makeCombatBar({ cur: actor.hp, max: actor.maxHp, isFoe, isFallen, kind: 'hp' }));
+  // MP 바는 본인(me) 쪽에만, 그것도 maxMp > 0 인 직업(mage 한정) 일 때만.
+  // novice 는 maxMp=0 이라 자동 숨김 — UI 잡음 차단. foe(몬스터/PvP) 는 MP
+  // 정보가 전술 의사결정에 직접 도움 안 돼 의도적으로 노출하지 않는다.
+  if (!isFoe && (actor.maxMp || 0) > 0) {
+    root.appendChild(makeCombatBar({ cur: actor.mp, max: actor.maxMp, isFoe: false, isFallen, kind: 'mp' }));
+  }
   return root;
 }
 
-function makeCombatBar(actor, isFoe, isFallen) {
+// HP/MP 공용 한 줄 바. kind 가 row 클래스(`cv-bar-hp`/`cv-bar-mp`) 로 흘러들어
+// CSS 가 색을 분기한다 — me/foe 분기는 그대로 유지.
+function makeCombatBar({ cur, max, isFoe, isFallen, kind }) {
   const row = document.createElement('div');
-  row.className = 'cv-bar-row' + (isFoe ? ' cv-foe' : ' cv-me') + (isFallen ? ' cv-fallen' : '');
+  row.className = 'cv-bar-row'
+    + (isFoe ? ' cv-foe' : ' cv-me')
+    + (isFallen ? ' cv-fallen' : '')
+    + ` cv-bar-${kind}`;
 
-  const max = actor.maxHp || 1;
-  const hp = Math.max(0, actor.hp);
+  const total = max || 1;
+  const value = Math.max(0, cur || 0);
   const cells = 12;
-  const filled = Math.round((hp / max) * cells);
+  const filled = Math.round((value / total) * cells);
 
   const line = document.createElement('div');
   line.className = 'cv-bar-line';
@@ -714,7 +730,7 @@ function makeCombatBar(actor, isFoe, isFallen) {
 
   const num = document.createElement('div');
   num.className = 'cv-bar-num';
-  num.textContent = `${hp} / ${actor.maxHp}`;
+  num.textContent = `${value} / ${max || 0}`;
 
   row.appendChild(line);
   row.appendChild(num);
@@ -1187,11 +1203,23 @@ function renderObjectView(view) {
 }
 
 function sendCmd(input) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'cmd', input }));
-  } else {
+  if (!(ws && ws.readyState === WebSocket.OPEN)) {
     appendLine('서버에 연결되어 있지 않습니다.', 'line error');
+    return false;
   }
+  // 실제 송신 + throttle 은 sendWS 가 담당. 100ms 이내 연쇄면 false.
+  return sendWS({ type: 'cmd', input });
+}
+
+// 명령 송신 + echo 라인을 묶는 헬퍼. throttle 또는 disconnected 로 송신이
+// 실패하면 echo 도 함께 생략 — 로그엔 보이지만 서버엔 도착 안 한 「유령 명령」
+// 을 차단한다(WASD auto-repeat 가 가장 빈번한 케이스). echoLabel 미지정 시
+// input 을 그대로 사용 — `sendCmdEcho('use potion')` 처럼 한 인자로 끝나는
+// 케이스가 다수. 반환값 = 송신 성공 여부.
+function sendCmdEcho(input, echoLabel = input) {
+  if (!sendCmd(input)) return false;
+  appendLine(`> ${echoLabel}`, 'line echo');
+  return true;
 }
 
 const cmdHistory = [];
@@ -1204,8 +1232,7 @@ promptForm.addEventListener('submit', (e) => {
   cmdHistory.unshift(input);
   if (cmdHistory.length > 10) cmdHistory.pop();
   historyIdx = -1;
-  appendLine(`> ${input}`, 'line echo');
-  sendCmd(input);
+  sendCmdEcho(input);
   promptInput.value = '';
   // 모바일에서는 엔터 후 키보드를 내려 채팅 영역을 다시 노출. 데스크톱은
   // 포커스를 유지해 연속 입력이 끊기지 않게 한다.
@@ -1282,8 +1309,7 @@ document.addEventListener('keydown', (e) => {
   const dir = WASD_DIR[e.code];
   if (!dir) return;
   e.preventDefault();
-  appendLine(`> [이동] ${dir}`, 'line echo');
-  sendCmd(`go ${dir}`);
+  sendCmdEcho(`go ${dir}`, `[이동] ${dir}`);
 });
 
 // ── Map ─────────────────────────────────────────────────
@@ -1575,11 +1601,9 @@ inventoryEl.addEventListener('click', (e) => {
   const id = li.dataset.itemId;
   const kind = li.dataset.kind;
   if (kind === 'equip') {
-    appendLine(`> 장착 ${id}`, 'line echo');
-    sendCmd(`equip ${id}`);
+    sendCmdEcho(`equip ${id}`, `장착 ${id}`);
   } else {
-    appendLine(`> use ${id}`, 'line echo');
-    sendCmd(`use ${id}`);
+    sendCmdEcho(`use ${id}`);
   }
 });
 
@@ -1591,8 +1615,7 @@ equipmentEl.addEventListener('click', (e) => {
   const li = e.target.closest('li[data-slot]');
   if (!li) return;
   const slot = li.dataset.slot;
-  appendLine(`> 해제 ${slot}`, 'line echo');
-  sendCmd(`unequip ${slot}`);
+  sendCmdEcho(`unequip ${slot}`, `해제 ${slot}`);
 });
 
 function setupDpad() {
@@ -1603,8 +1626,7 @@ function setupDpad() {
     if (!btn) return;
     const dir = btn.dataset.dir;
     if (!dir) return;
-    appendLine(`> [이동] ${dir}`, 'line echo');
-    sendCmd(`go ${dir}`);
+    sendCmdEcho(`go ${dir}`, `[이동] ${dir}`);
   });
 }
 
@@ -1709,8 +1731,7 @@ function renderActionPad() {
       pad.appendChild(makeActionBtn('공격', 'action-cat', () => {
         const foe = combatFoeInRoom();
         if (foe) {
-          appendLine(`> 공격 ${foe.name}`, 'line echo');
-          sendCmd(`attack ${foe.name}`);
+          sendCmdEcho(`attack ${foe.name}`, `공격 ${foe.name}`);
           return;
         }
         actionPadLevel = 'attack';
@@ -1741,8 +1762,7 @@ function renderActionPad() {
       pad.appendChild(makeSpellBtn(s.name, s.mpCost, cls, () => {
         const foe = combatFoeInRoom();
         if (foe) {
-          appendLine(`> ${s.name} ${foe.name}`, 'line echo');
-          sendCmd(`${s.name} ${foe.name}`);
+          sendCmdEcho(`${s.name} ${foe.name}`);
           actionPadLevel = 'root';
           selectedSpell = null;
           return;
@@ -1763,8 +1783,7 @@ function renderActionPad() {
     const spell = selectedSpell;
     for (const t of magicTargets()) {
       pad.appendChild(makeActionBtn(t.name, `action-target action-spell-${spell?.element || 'fire'}`, () => {
-        appendLine(`> ${spell.name} ${t.name}`, 'line echo');
-        sendCmd(`${spell.name} ${t.name}`);
+        sendCmdEcho(`${spell.name} ${t.name}`);
         actionPadLevel = 'root';
         selectedSpell = null;
         renderActionPad();
@@ -1782,8 +1801,7 @@ function renderActionPad() {
   const verbCmd = actionPadLevel === 'attack' ? 'attack' : 'look';
   for (const t of targets) {
     pad.appendChild(makeActionBtn(t.name, 'action-target', () => {
-      appendLine(`> ${verbLabel} ${t.name}`, 'line echo');
-      sendCmd(`${verbCmd} ${t.name}`);
+      sendCmdEcho(`${verbCmd} ${t.name}`, `${verbLabel} ${t.name}`);
       actionPadLevel = 'root';
       renderActionPad();
     }));

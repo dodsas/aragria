@@ -207,6 +207,9 @@ body {
 #combat-view .cv-bar-bracket { color: var(--fg-dim); }
 #combat-view .cv-bar-row.cv-me  .cv-bar-fill { color: #4caf50; }
 #combat-view .cv-bar-row.cv-foe .cv-bar-fill { color: #d04040; }
+/* MP 바 — 사이드바의 stat-bar-mp 와 같은 토큰(--c-room) 으로 테마 추종.
+   me 의 HP fill 규칙(녹색) 을 specificity 로 덮어쓴다(클래스 3개 대 2개). */
+#combat-view .cv-bar-row.cv-me.cv-bar-mp .cv-bar-fill { color: var(--c-room); }
 #combat-view .cv-bar-empty { opacity: 0.22; }
 #combat-view .cv-bar-num {
   color: var(--fg-dim);

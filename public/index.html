@@ -156,6 +156,9 @@
     </div>
   </div>
   <script src="/env.js"></script>
-  <script src="/client.js"></script>
+  <!-- type="module" 은 client.js 가 throttle.js 같은 ESM 모듈을 import 하도록.
+       자동 defer 라 DOM 파싱 후 실행되며, env.js 가 먼저 정의한 window 글로벌
+       (AGRIA_DEV / AGRIA_NAVER_LOGIN) 도 그대로 보인다. -->
+  <script type="module" src="/client.js"></script>
 </body>
 </html>

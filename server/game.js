@@ -2014,7 +2014,9 @@ export class Game {
       combat: {
         // Recipient's own id, so the client knows whose sprite to draw on the
         // "me" side from its character_sprite cache.
-        player: { id: recipient.id, name: recipient.name, icon: recipient.icon, hp: Math.max(0, recipient.hp), maxHp: recipient.maxHp },
+        // mp / maxMp 도 함께 — 전투 패널이 본인 쪽에 MP 바를 렌더(maxMp > 0
+        // 인 직업, 즉 mage 한정). novice 는 maxMp=0 이라 클라가 자연스럽게 숨김.
+        player: { id: recipient.id, name: recipient.name, icon: recipient.icon, hp: Math.max(0, recipient.hp), maxHp: recipient.maxHp, mp: Math.max(0, recipient.mp || 0), maxMp: recipient.maxMp || 0 },
         foe: foePayload,
         fallen,
         killerName, // when fallen==='foe' and killer != recipient, the killer's display name

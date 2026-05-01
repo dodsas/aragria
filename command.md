@@ -16,7 +16,43 @@
 ## 방어 계층 (바깥 → 안쪽)
 
 요청 한 건이 통과하려면 아래 5 계층을 순서대로 모두 통과해야 한다. 한
-계층이라도 차단하면 그 시점에 거부되거나 큐잉된다.
+계층이라도 차단하면 그 시점에 거부되거나 큐잉된다. 추가로 와이어보다 더
+바깥쪽에 **클라 자체 송신 게이트**(아래 0 계층)가 있어 키보드 auto-repeat 등의
+프레임 단위 flood 가 서버 토큰 버킷에 도달하기 전에 잘려 나간다 — 어디까지나
+대역 절약과 echo 정합성을 위한 보조 게이트이며, 클라 코드를 우회한 직접 WS
+연결은 여전히 1~5 계층이 모두 권위로 막는다.
+
+### 0. 클라 송신 최소 간격 (`MIN_SEND_INTERVAL_MS = 100`, `public/client.js`)
+
+`sendWS()` 가 마지막 송신 시각(`lastSendAt`, 모듈 스코프) 으로부터 100ms 이내
+호출되면 silent drop. `sendCmd()` 와 `sendCmdEcho()` 모두 결국 `sendWS()` 를
+거치므로 어떤 입구(키 입력 / d-pad / 액션 패드 / sidebar 버튼 / `register` /
+`force_takeover`) 든 동일하게 게이팅된다. 시각은 `performance.now()` — NTP 보정
+등으로 시스템 시계가 뒤로 점프해도 게이트가 영구 차단되지 않는 monotonic clock.
+
+`sendCmdEcho(input, echoLabel = input)` 는 송신 성공 시에만 `> <echoLabel>`
+로그 라인을 추가해 「로그엔 명령이 보이는데 서버엔 안 도착한 유령 명령」 을
+차단한다. `echoLabel` 미지정 시 `input` 을 그대로 사용 — `use ${id}` 같은
+영문 명령이 그대로 표시될 때는 한 인자만 넘기면 끝.
+
+`lastSendAt` 은 재연결로 `ws` 가 새로 만들어져도 reset 되지 않아 reconnect 직후
+burst 우회도 막힌다. 첫 송신 통과를 위해 `-Infinity` 로 초기화.
+
+상한 100ms = 10/s 는 5 계층의 `CMD_RATE_PER_SEC=8` 보다 약간 더 관대하지만,
+WASD 30Hz auto-repeat 이나 버튼 연타가 burst 16 을 한 번에 비우는 사고를 클라단에서
+사전 차단하는 것이 목적이다. 명령별 cooldown(`MOVE_COOLDOWN_MS=500` 등) 은
+어차피 서버가 권위로 강제하므로, 클라단 100ms 가 너무 관대해도 게임 동작은 변하지 않는다.
+
+### 0-α. 후속 과제 — 명령별 cadence throttle (미구현)
+
+현 100ms 글로벌 throttle 은 「move 가 500ms 마다만 의미가 있다」 는 사실을 모른다.
+W 를 길게 눌러 corridor 를 건너는 자연스러운 입력이 30Hz → 10Hz 로 줄어 서버에
+도달, `MOVE_COOLDOWN_MS=500` 이 뒷단에서 2Hz 로 다시 자르는 구조라 8/s 는 토큰
+버킷을 갉아먹기만 한다. 명령별 cadence 를 알도록 — `move` 는 500ms, 그 외 100ms
+— 만들면 1) 토큰 버킷 낭비 제거, 2) 서버 도달 트래픽 추가 절감, 3) latency 동일.
+다만 「W 누르고 있으면 계속 이동」 UX 는 keyup/keydown 트래킹과 타이머가 필요해
+간단한 작업은 아니다. 현재 정책으론 게임 동작에 영향 없으므로 미루고 — 이상 트래픽
+징후가 보이면 그때 도입.
 
 ### 1. WS 프레임 캡 (`WS_MAX_PAYLOAD = 4096`)
 
@@ -233,3 +269,16 @@ export const KILLSTEAL_MOVE_BLOCK_MS = 5000;
   쿨다운 우회 방지.
 - 어뷰즈 방어 계층(WS 프레임 캡 4 KiB, 입력 길이 캡 500자, IP 별 연결 빈도
   6/10s) 정리.
+- 클라 측 송신 최소 간격(`MIN_SEND_INTERVAL_MS=100`, `public/client.js`) 도입 —
+  키보드 auto-repeat / 버튼 연타가 서버 토큰 버킷에 도달하기 전에 잘려 나가도록.
+  `sendCmdEcho()` 헬퍼로 송신 실패 시 로그 echo 도 함께 생략(유령 명령 방지).
+  서버 권위 5 계층은 그대로 — 클라 우회 공격은 여전히 서버에서 막힌다.
+- 클라 throttle 의 시계를 `Date.now()` → `performance.now()` 로 교체(monotonic).
+  `sendCmdEcho` 시그니처를 `(input, echoLabel = input)` 으로 정리해 같은 문자열을
+  두 번 넘기던 호출 사이트 4 개를 한 인자로 압축.
+- throttle 정책을 `public/throttle.js` ESM 모듈로 추출하고 `client.js` 가 import
+  하도록 재구성(index.html 의 client.js 스크립트는 `type="module"` 로 전환).
+  `tests/throttle.test.js` 13 케이스로 가짜 시계·가짜 소켓 주입 회귀 가드 — 첫
+  송신 통과 / 100ms 경계(99/100/101) / 소켓 readyState 분기 / `sock.send` throw /
+  JSON 직렬화 실패 / 재연결 시 새 소켓 follow / 인스턴스 격리 / 30Hz 입력에서
+  ~10 통과 sustained.
