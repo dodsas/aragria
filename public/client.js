@@ -249,6 +249,38 @@ function scrollLogToBottom() {
 let combatDismissTimer = null;
 let lastCombat = { playerHp: null, foeHp: null };
 let inCombat = false;
+
+// 마법 시전 시 띄울 발사체 글리프(element 별). 색은 CSS .cv-elem-<element>
+// 의 drop-shadow 가 담당 — 글리프 자체는 element 정체성만 표현.
+const SPELL_GLYPH = {
+  fire: '🔥',
+  ice: '❄',
+  lightning: '⚡',
+  dark: '💀',
+  meteor: '☄',
+};
+
+// cv-stage 위에 absolute 로 떠 캐스터→타겟 방향으로 날아가 폭발 모션으로
+// 사라지는 일회성 overlay. CSS keyframe(`cv-spell-fly` / `cv-spell-meteor-fall`)
+// 종료 시 스스로 정리하고, animationend 가 어쩌다 누락되어도 1.5s safety
+// timeout 으로 강제 제거. 다음 combat 메시지가 stage 를 교체해도 overlay 는
+// 살아남도록 renderCombat 이 stage 만 선택적으로 교체한다.
+function spawnSpellEffect(effect) {
+  if (!effect || !combatViewEl) return;
+  const element = effect.element || 'fire';
+  const wrap = document.createElement('div');
+  wrap.className = `cv-spell cv-elem-${element}`;
+  const proj = document.createElement('span');
+  proj.className = 'cv-spell-projectile';
+  proj.textContent = SPELL_GLYPH[element] || '✦';
+  wrap.appendChild(proj);
+  combatViewEl.appendChild(wrap);
+  proj.addEventListener('animationend', () => {
+    if (wrap.parentNode) wrap.remove();
+  }, { once: true });
+  setTimeout(() => { if (wrap.parentNode) wrap.remove(); }, 1500);
+}
+
 function renderCombat(combat) {
   if (combatDismissTimer) {
     clearTimeout(combatDismissTimer);
@@ -256,6 +288,7 @@ function renderCombat(combat) {
   }
   if (!combat) {
     combatViewEl.hidden = true;
+    // 패널을 닫을 때만 모든 자식(stage + in-flight overlay) 일괄 청소.
     combatViewEl.innerHTML = '';
     combatViewEl.classList.remove('fading');
     lastCombat = { playerHp: null, foeHp: null };
@@ -265,7 +298,6 @@ function renderCombat(combat) {
   }
   inCombat = true;
   combatViewEl.hidden = false;
-  combatViewEl.innerHTML = '';
   combatViewEl.classList.remove('fading');
 
   const fallen = combat.fallen || null;
@@ -285,7 +317,20 @@ function renderCombat(combat) {
   stage.appendChild(vs);
   stage.appendChild(actorFoe);
 
+  // stage 만 선택적으로 교체 — innerHTML='' 로 전체 비우면 in-flight 마법
+  // overlay 가 사라진다(시전 직후 도착하는 counter-attack 메시지에 휘말려).
+  const oldStage = combatViewEl.querySelector('.cv-stage');
+  if (oldStage) oldStage.remove();
   combatViewEl.appendChild(stage);
+
+  // effect 페이로드가 실려 있으면 overlay 발사. 같은 cast 사이클에서 두 번
+  // 이상 메시지가 도착해도(예: caster 자신의 spell 메시지 + 같은 방 onlooker
+  // 가 본인 캐릭터로도 받은 메시지) 매번 새 overlay 가 추가될 수 있으므로
+  // 직전에 띄운 것이 아직 살아 있으면 한 번만 띄우도록 가드.
+  if (combat.effect?.kind === 'spell') {
+    const existing = combatViewEl.querySelector('.cv-spell');
+    if (!existing) spawnSpellEffect(combat.effect);
+  }
 
   lastCombat = { playerHp: combat.player.hp, foeHp: combat.foe.hp };
 

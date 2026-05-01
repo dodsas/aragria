@@ -242,6 +242,55 @@ body {
   100% { transform: translateX(0); }
 }
 
+/* ── Combat: spell effect overlay ─────────────────────────
+   castSpell 이 trigger 한 element 별 글로우 발사체. cv-stage 위에 absolute
+   로 떠 캐스터(왼쪽 22%) → 적(오른쪽 78%)으로 날아가 폭발 모션으로 사라진다.
+   메테오는 위→아래로 떨어지는 별도 keyframe 사용. 색은 데미지 텍스트
+   (tx-dmg-<element>)와 같은 RGB 라 element 정체성이 일관되게 유지된다 —
+   테마 변수 미사용. */
+#combat-view .cv-spell {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  overflow: hidden;
+}
+#combat-view .cv-spell-projectile {
+  position: absolute;
+  top: 45%;
+  left: 22%;
+  font-size: 36px;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+  animation: cv-spell-fly 0.7s ease-in forwards;
+  will-change: left, top, transform, opacity, filter;
+}
+#combat-view .cv-elem-fire .cv-spell-projectile      { filter: drop-shadow(0 0 8px #ff6b35) drop-shadow(0 0 18px #ff6b35); }
+#combat-view .cv-elem-ice .cv-spell-projectile       { filter: drop-shadow(0 0 8px #6dd5ed) drop-shadow(0 0 18px #6dd5ed); }
+#combat-view .cv-elem-lightning .cv-spell-projectile { filter: drop-shadow(0 0 8px #f7e07c) drop-shadow(0 0 18px #f7e07c); }
+#combat-view .cv-elem-dark .cv-spell-projectile      { filter: drop-shadow(0 0 8px #b289ff) drop-shadow(0 0 18px #b289ff); }
+#combat-view .cv-elem-meteor .cv-spell-projectile {
+  font-size: 48px;
+  filter: drop-shadow(0 0 10px #ff4848) drop-shadow(0 0 22px #ff4848);
+  animation-name: cv-spell-meteor-fall;
+  animation-duration: 0.8s;
+}
+
+@keyframes cv-spell-fly {
+  0%   { left: 22%; transform: translate(-50%, -50%) scale(0.5) rotate(0deg); opacity: 0; }
+  15%  { opacity: 1; }
+  60%  { left: 78%; transform: translate(-50%, -50%) scale(1.1) rotate(20deg); opacity: 1; }
+  75%  { left: 78%; transform: translate(-50%, -50%) scale(2.0) rotate(20deg); opacity: 0.85; }
+  100% { left: 78%; transform: translate(-50%, -50%) scale(3.2) rotate(20deg); opacity: 0; }
+}
+@keyframes cv-spell-meteor-fall {
+  0%   { left: 50%; top: -10%; transform: translate(-50%, -50%) scale(0.5) rotate(-30deg); opacity: 0; }
+  20%  { opacity: 1; }
+  60%  { left: 78%; top: 50%;  transform: translate(-50%, -50%) scale(1.3) rotate(45deg); opacity: 1; }
+  75%  { left: 78%; top: 50%;  transform: translate(-50%, -50%) scale(2.4) rotate(45deg); opacity: 0.85; }
+  100% { left: 78%; top: 50%;  transform: translate(-50%, -50%) scale(3.6) rotate(45deg); opacity: 0; }
+}
+
 /* ── Object view panel (UI for "looked-at" objects) ───── */
 #object-view {
   margin: 0 20px 12px;

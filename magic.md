@@ -110,6 +110,61 @@
 
 ---
 
+## 전투 패널 이펙트
+
+마법 시전 시 전투 패널(`#combat-view`)에 element 별 발사체 overlay 가 뜬다.
+서버 → 클라 통신은 기존 `combat` 메시지에 `effect` 필드를 추가한 형태:
+
+```js
+{ type: 'combat', combat: {
+  player: { ... },
+  foe:    { ... },
+  fallen: 'foe' | 'me' | null,
+  killerName: string | null,
+  effect: { kind: 'spell', element: 'fire', name: '파이어볼' } | null,
+}}
+```
+
+`Game.castSpell` 은 한 사이클에서 발사하는 모든 `pushCombat` 호출에 동일한
+`effect` 객체를 같이 실어 보낸다(onlooker 메시지·killing-blow 메시지·반격
+이후 caster 최종 메시지 모두). 이렇게 하면 어떤 메시지가 먼저 도착하든
+overlay 가 한 번 떠 준다.
+
+### 글리프 / 색
+
+| element     | 글리프 | 글로우 색 | 비고                                  |
+|-------------|--------|-----------|---------------------------------------|
+| `fire`      | 🔥     | `#ff6b35` | 표준 좌→우 비행                       |
+| `ice`       | ❄      | `#6dd5ed` | 표준 좌→우 비행                       |
+| `lightning` | ⚡     | `#f7e07c` | 표준 좌→우 비행                       |
+| `dark`      | 💀     | `#b289ff` | 해골 전사 — 표준 좌→우 비행           |
+| `meteor`    | ☄      | `#ff4848` | 위→오른쪽 아래로 낙하(별도 keyframe)  |
+
+글리프 자체는 element 정체성, 글로우 색은 CSS `.cv-elem-<element>` 의
+`drop-shadow` 가 담당. 데미지 텍스트(`tx-dmg-<element>`)와 같은 RGB 라
+인식 일관성 유지.
+
+### 클라이언트 보존 동작
+
+`renderCombat` 은 새 combat 메시지가 도착할 때 `innerHTML='' ` 로 일괄 비우는
+대신 `.cv-stage` 만 선택적으로 제거하고 새 stage 를 append 한다. 이 덕분에
+캐스트 직후 도착하는 반격(counter-attack) `combat` 메시지가 stage 만 갈아
+끼워도 in-flight overlay 가 살아남아 애니메이션을 마저 재생한다. overlay 는:
+
+- CSS keyframe 종료 시 `animationend` 로 스스로 정리
+- 만약을 위해 1.5s safety timeout 으로 이중 가드
+- 패널 자체가 닫힐 때(`renderCombat(null)`) 전체 innerHTML 와 함께 일괄 정리
+
+### 새 element 의 이펙트 추가
+
+1. 위 매트릭스에 글리프/색 한 줄 추가.
+2. `client.js` 의 `SPELL_GLYPH` 맵에 entry 한 줄.
+3. `style.css` 에 `#combat-view .cv-elem-<new> .cv-spell-projectile` 의
+   `filter: drop-shadow(...)` 한 줄. 비행 궤적이 표준과 다르다면(예: 메테오
+   처럼 위→아래) `animation-name` 을 따로 두고 keyframe 도 같이 추가.
+
+---
+
 ## 마나 회복
 
 `Game._regenTick` 에서 3초마다 마법사 한정으로 MP +1. 만렙(maxMp)에 도달

@@ -1330,6 +1330,11 @@ export class Game {
     const { killingBlow } = this.applyMonsterDamage(target, dmg);
 
     const dmgCls = `tx-dmg-${spell.element}`;
+    // 시각 이펙트 페이로드. 이 cast 사이클의 모든 pushCombat 에 동일하게
+    // 실어 보낸다 — 클라이언트는 첫 도착하는 메시지에서 overlay 를 띄우고
+    // 이어지는 counter-attack 메시지가 stage 만 교체하더라도 overlay 가
+    // 살아남는다(magic.md 참조).
+    const spellEffect = { kind: 'spell', element: spell.element, name: spell.name };
     this.seg(player, [
       { text: `${spell.castVerb} ` },
       { text: target.name, cls: 'monster-name' },
@@ -1366,7 +1371,7 @@ export class Game {
           killStealVictimId = p.id;
         }
       }
-      this.pushCombat(p, target, 'monster', killingBlow ? 'foe' : null, killingBlow ? player.name : null);
+      this.pushCombat(p, target, 'monster', killingBlow ? 'foe' : null, killingBlow ? player.name : null, spellEffect);
       if (killingBlow) p.combatTargetId = null;
     }
 
@@ -1375,7 +1380,7 @@ export class Game {
       const list = this.roomMonsters.get(roomId);
       list.splice(list.indexOf(target), 1);
       this.seg(player, [{ text: target.name, cls: 'monster-name' }, { text: '이(가) 쓰러졌다!' }]);
-      this.pushCombat(player, target, 'monster', 'foe');
+      this.pushCombat(player, target, 'monster', 'foe', null, spellEffect);
       player.combatTargetId = null;
       this._pushRoomMonsters(roomId);
       const expReward = MONSTER_DEFS[target.defId]?.expReward || 0;
@@ -1406,12 +1411,12 @@ export class Game {
     if (player.hp <= 0) {
       const fromRoom = player.roomId;
       this.send(player, { type: 'system', text: '의식을 잃고 쓰러졌다...' });
-      this.pushCombat(player, target, 'monster', 'me');
+      this.pushCombat(player, target, 'monster', 'me', null, spellEffect);
       this._respawnAtSquare(player);
       this._pushRoomMonsters(fromRoom);
       return;
     }
-    this.pushCombat(player, target, 'monster');
+    this.pushCombat(player, target, 'monster', null, null, spellEffect);
     this.pushStatus(player);
     this._pushRoomMonsters(player.roomId);
   }
@@ -1617,7 +1622,11 @@ export class Game {
   // `kind` is 'monster' | 'player' — describes the foe relative to the recipient.
   // `fallen` is 'foe' | 'me' | null — relative to the recipient too, so the
   // client can pick the right sprite/animation without knowing absolute identity.
-  pushCombat(recipient, foe, kind, fallen = null, killerName = null) {
+  // `effect` (optional): 일회성 시각 효과(예: 마법 발사체). 클라이언트의
+  // renderCombat 이 이 페이로드를 보고 cv-stage 위에 overlay 애니메이션을
+  // 띄운다 — 마법 시전과 동시에 도착하는 counter-attack 메시지에 휘말려
+  // overlay 가 지워지지 않도록 클라가 stage 만 선택적으로 교체한다(magic.md 「전투 패널 이펙트」 절).
+  pushCombat(recipient, foe, kind, fallen = null, killerName = null, effect = null) {
     const foePayload = kind === 'monster'
       ? { kind, name: foe.name, defId: foe.defId, icon: foe.icon, hp: Math.max(0, foe.hp), maxHp: foe.maxHp }
       // Player foe carries `id` so the client can look up the cached sprite
@@ -1633,6 +1642,7 @@ export class Game {
         foe: foePayload,
         fallen,
         killerName, // when fallen==='foe' and killer != recipient, the killer's display name
+        effect,
       },
     });
   }
