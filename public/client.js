@@ -139,9 +139,30 @@ function handleServerInfo(version) {
   }
   if (version === serverVersion || serverUpdateTriggered) return;
   serverUpdateTriggered = true;
-  appendLine('서버 업데이트가 감지되었습니다. 새로고침합니다…', 'line system');
+  appendLine('서버 업데이트가 감지되었습니다. 확인을 눌러 새로고침하세요.', 'line system');
   if (promptInput) promptInput.disabled = true;
-  setTimeout(() => location.reload(), 1500);
+  showServerUpdateModal();
+}
+
+// 서버 부팅 시각이 바뀌면 모달을 띄우고 사용자가 명시적으로 확인을 눌러야
+// reload 한다. 자동 타이머 reload 는 시스템 라인이 너무 빨리 사라져 무엇이
+//일어났는지 모르는 경우가 많아 폐기. 모달은 ESC/배경 클릭으로 닫히지 않는다.
+function showServerUpdateModal() {
+  const overlay = document.getElementById('server-update-overlay');
+  const confirmBtn = document.getElementById('server-update-confirm');
+  if (!overlay || !confirmBtn) {
+    // 모달 요소가 없으면 안전하게 즉시 reload — 안내가 없는 채로 멈추는
+    // 것보다는 새 빌드로 넘어가는 편이 낫다.
+    location.reload();
+    return;
+  }
+  overlay.hidden = false;
+  confirmBtn.focus();
+  confirmBtn.addEventListener('click', () => {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = '새로고침 중…';
+    location.reload();
+  }, { once: true });
 }
 
 function showWelcome() {
