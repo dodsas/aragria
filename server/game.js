@@ -564,16 +564,22 @@ export class Game {
   // sid matches (preserving HP, kill-steal block, room, etc.) or allocates a
   // fresh one. Rejecting duplicate live sessions on the same sid prevents two
   // tabs from controlling the same character.
-  attachPlayer(socket, sid) {
+  //
+  // allowTakeover=false (production default): older-wins. 같은 sid 의 살아 있는
+  // 소켓이 이미 있으면 신규 연결을 null 로 거절해 호출자가 4004 로 close 하게
+  // 한다. 두 탭 사이 newer-wins 핑퐁(close(4001) 이 1006 으로 도착해 양쪽이
+  // generic auto-reconnect 로 떨어지는 무한 루프) 을 원천 차단.
+  // allowTakeover=true (DEV): 같은 탭 새로고침에서 옛 소켓이 아직
+  // readyState=1 일 때 새 소켓이 받기를 원하므로 newer-wins 유지.
+  attachPlayer(socket, sid, { allowTakeover = false } = {}) {
     if (sid) {
       const existing = this.sidToPlayer.get(sid);
       if (existing) {
-        // Newer-wins: if a live socket is still bound (multi-tab, or refresh
-        // where the old close hasn't propagated yet), force-close it so this
-        // new socket can rebind. The old socket's `close` handler in index.js
-        // is guarded by `player.socket === socket` and silently skips its
-        // detach when that's no longer true — so this rebind is race-safe.
         if (existing.socket && existing.socket.readyState === 1) {
+          if (!allowTakeover) return null;
+          // DEV newer-wins: 옛 소켓을 강제 close. The old socket's `close`
+          // handler in index.js is guarded by `player.socket === socket` and
+          // silently skips its detach when that's no longer true — race-safe.
           try { existing.socket.close(4001, 'replaced by newer session'); } catch {}
         }
         if (existing.graceTimer) {

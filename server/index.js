@@ -81,8 +81,14 @@ wss.on('connection', (socket, req) => {
     sid = (url.searchParams.get('sid') || '').slice(0, 64);
   } catch {}
 
-  const player = game.attachPlayer(socket, sid);
-  if (!player) return; // duplicate active session — game already closed the socket
+  // Older-wins (production): 같은 sid 의 살아 있는 소켓이 이미 있으면 신규를
+  // 거절. DEV 는 같은 탭 새로고침 race 를 받아 주기 위해 newer-wins 유지.
+  const player = game.attachPlayer(socket, sid, { allowTakeover: DEV });
+  if (!player) {
+    // 4004 = duplicate session. 클라이언트는 자동 재연결 없이 안내 오버레이만.
+    try { socket.close(4004, 'duplicate session'); } catch {}
+    return;
+  }
   try { socket.send(JSON.stringify({ type: 'server_info', version: SERVER_VERSION })); } catch {}
 
   socket.on('message', async (data) => {

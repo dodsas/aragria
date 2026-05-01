@@ -76,10 +76,9 @@ function connect() {
     connStatus.className = 'off';
 
     if (code === 4001) {
-      // Server force-closed because a newer connection took over this sid
-      // (typically: another tab/창 on the same PC — sid는 localStorage 공유).
-      // 자동 재연결은 두 탭 사이 다툼을 만들기 때문에 여기서 차단하고,
-      // 사용자가 명시적으로 "이 탭에서 다시 시작"을 누르면 그제야 connect().
+      // DEV-only newer-wins takeover. 프로덕션은 older-wins(서버에서 4004 로
+      // 신규를 거절)이라 이 경로는 거의 발생하지 않지만, DEV 같은 탭 새로고침
+      // race 등에서 옛 소켓이 받을 수 있어 안전망으로 유지.
       connStatus.textContent = '다른 탭에서 접속됨 — 이 탭은 종료됨';
       showPolicyOverlay({
         glyph: '⛔',
@@ -87,6 +86,21 @@ function connect() {
         msg: '같은 계정으로 다른 탭(또는 창)에서 새 접속이 감지되어<br/>이 탭의 연결이 종료되었습니다.',
         sub: '한 PC에서는 한 캐릭터만 동시에 접속할 수 있어요. 이 탭에서 계속하려면 아래 버튼을 누르세요 — 다른 탭이 자동으로 끊어집니다.',
         action: '이 탭에서 다시 시작',
+        onAction: () => { hidePolicyOverlay(); connect(); },
+      });
+      return;
+    }
+    if (code === 4004) {
+      // 같은 sid 의 다른 탭이 이미 접속 중이라 서버가 이쪽 소켓을 거절(older-wins).
+      // 두 탭 사이 newer-wins 핑퐁 무한 루프를 막기 위해 자동 재연결 절대 금지.
+      // 사용자가 다른 탭을 닫고 「이 탭에서 다시 시도」를 눌러야 connect().
+      connStatus.textContent = '다른 탭에서 접속 중 — 이 탭은 차단됨';
+      showPolicyOverlay({
+        glyph: '⛔',
+        title: '중복 접속 차단',
+        msg: '같은 PC의 다른 탭(또는 창)에서 이미 접속 중이어서<br/>이 탭의 연결이 거절되었습니다.',
+        sub: '한 PC에서는 한 캐릭터만 동시에 접속할 수 있어요. 이 탭에서 계속하려면 다른 탭을 먼저 닫고 아래 버튼을 누르세요.',
+        action: '이 탭에서 다시 시도',
         onAction: () => { hidePolicyOverlay(); connect(); },
       });
       return;
