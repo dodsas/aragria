@@ -85,7 +85,9 @@
 
 ### Magic 서브메뉴 (마법사 한정)
 
-- `magic-spells` — 캐릭터가 시전 가능한 마법(`status.spells[]`)을 한 개씩 버튼으로(`<이름>·<MP비용>MP`). 버튼은 element 별 색(`action-spell-fire/ice/...`).
+- `magic-spells` — 캐릭터가 시전 가능한 마법(`status.spells[]`)을 한 개씩 버튼으로. 버튼은 element 별 색(`action-spell-fire/ice/...`).
+  - **라벨**: 본문은 마법 이름만, MP 비용은 우상단 작은 superscript(`.spell-mp`). 본문 폭이 평균 30~40% 짧아져 한 줄에 더 많이 들어간다.
+  - **MP 필터**: `mpCost > currentMp` 인 마법은 패드에서 제외. 「누르면 실패」를 원천 차단하고 후반 캐릭터의 패드 길이를 자연스럽게 줄인다. MP 가 다시 차면 다음 status push 가 자동 복원.
   - 일반 탭(교전 외) → `selectedSpell` 저장 + `magic-targets` 로 진입.
   - 교전 단축경로 → 그 자리에서 `<마법명> <foe>` 송신 + root 복귀.
 - `magic-targets` — 같은 방의 살아 있는 몬스터 리스트 + ↩ 백 버튼.
@@ -100,7 +102,14 @@
 
 - 카테고리 버튼(`.action-cat`): 강조 배경(`--accent-soft`).
 - 타깃 버튼(`.action-target`): 일반 배경. 긴 이름은 `text-overflow: ellipsis` 로 잘리며 `max-width: 130px` 캡.
+- 마법 버튼(`.action-spell`): element 색 배경. 본문은 마법 이름(`.spell-name`), 우상단에 작은 MP 숫자(`.spell-mp`, position: absolute) — 두 정보를 시각 위계로 분리해 본문 폭을 줄인다.
 - 백 버튼(`.action-back`): 투명 + 디밍 색.
+
+### 오버플로 처리 — 가로 스크롤 1줄
+
+`#action-pad` 는 `flex-wrap: nowrap; overflow-x: auto` 로 세팅돼 마법 N 개로 폭이 넘치면 세로 wrap 대신 가로 1줄 스크롤이 된다(모바일에서 더 자연스러운 제스처). `renderActionPad()` 가 매 렌더 직후 `pad.scrollLeft = pad.scrollWidth` 로 우측 끝(↩ 백 버튼·가장 최근 카테고리)이 기본 보이게 맞춘다 — 사용자는 좌측으로 스와이프해 나머지를 본다. `scrollbar-width: none` + `-webkit-scrollbar { display: none }` 으로 스크롤바는 숨김.
+
+(MP 필터로 시전 가능한 마법만 노출되므로 가로 스크롤은 「많이 가졌고 MP 도 충분한 후반 빌드」 의 안전망 — 평소엔 한 줄에 들어간다.)
 
 ## 서버 프로토콜
 
@@ -184,3 +193,4 @@ let actionPadLevel = 'root';
 - 우측 액션 패드 도입 — 처음에는 `공격`/`봐` 라벨 회전(예측 사이클)이었다가, 계층 구조(root → 타깃 리스트 → ↩)로 재설계.
 - 서버 `room_monsters` 페이로드에 `objects` / `players` 추가, 룸 구성 변화 지점에 푸시 호출 보강.
 - 카테고리 버튼은 후보가 있을 때만 노출 — 빈 메뉴 탭을 원천 차단.
+- 마법 폭증으로 액션 패드가 짤리던 문제를 셋 다 적용으로 해소 — (1) MP superscript 분리로 본문 폭 30~40% ↓, (2) `mpCost > currentMp` 마법 필터, (3) 세로 wrap 대신 가로 1줄 스크롤(`flex-wrap: nowrap` + 렌더 직후 `scrollLeft = scrollWidth`).

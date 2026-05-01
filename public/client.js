@@ -1010,9 +1010,12 @@ function appendLine(content, cls = 'line') {
   scrollLogToBottom();
 }
 
-// 마법 메뉴(모바일 액션 패드)에서 사용할 가장 최근 spell 목록.
-// 서버 status 가 권위적이며, renderStatus 가 매번 갱신한다.
+// 마법 메뉴(모바일 액션 패드)에서 사용할 가장 최근 spell 목록과 현재 MP.
+// 서버 status 가 권위적이며, renderStatus 가 매번 갱신한다. magicSpells()
+// 가 currentMp 로 mpCost 를 필터링해 「당장 시전 못 하는」 마법은 패드에
+// 노출되지 않는다 — 패드가 자연스럽게 짧아지고 오탭 후 「MP 부족」 도 사라진다.
 let currentSpells = [];
+let currentMp = 0;
 
 function setBar(fillEl, numEl, cur, max) {
   if (!fillEl || !numEl) return;
@@ -1067,6 +1070,7 @@ function renderStatus(status) {
 
   // 모바일 마법 메뉴를 채울 spell 목록 캐싱. 서버 status 가 클라 권위 원본.
   currentSpells = Array.isArray(status.spells) ? status.spells : [];
+  currentMp = Number(status.mp) || 0;
   // 액션 패드가 떠 있는 동안 새 마법이 해금되거나 mp 가 변하면 즉시 반영.
   if (typeof renderActionPad === 'function') renderActionPad();
 
@@ -1648,8 +1652,11 @@ function combatFoeInRoom() {
 
 // 메뉴 노출용. spells 배열은 server status 가 권위. spell.element 를 그대로
 // 버튼 클래스로 끌어오면 자동으로 element 색이 입혀진다(action-spell-fire 등).
+// MP 부족한 마법은 제외 — 「누르면 실패」를 원천 차단하고 패드 길이도 줄인다.
+// MP 가 다시 차오르면 status push 가 renderActionPad 를 호출해 자동 복원.
 function magicSpells() {
-  return Array.isArray(currentSpells) ? currentSpells : [];
+  if (!Array.isArray(currentSpells)) return [];
+  return currentSpells.filter(s => Number(s.mpCost) <= currentMp);
 }
 
 function makeActionBtn(label, cls, onClick) {
@@ -1661,10 +1668,31 @@ function makeActionBtn(label, cls, onClick) {
   return btn;
 }
 
+// 마법 전용 버튼 — 본문(이름)과 우상단 MP superscript 로 시각 위계 분리.
+// 일반 makeActionBtn 과 달리 MP 가 본문 폭을 잡아먹지 않게 absolute 로 띄운다.
+function makeSpellBtn(name, mpCost, cls, onClick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'action-btn' + (cls ? ' ' + cls : '');
+  const nameEl = document.createElement('span');
+  nameEl.className = 'spell-name';
+  nameEl.textContent = name;
+  const mpEl = document.createElement('span');
+  mpEl.className = 'spell-mp';
+  mpEl.textContent = mpCost;
+  btn.append(nameEl, mpEl);
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
 function renderActionPad() {
   const pad = document.getElementById('action-pad');
   if (!pad) return;
   pad.innerHTML = '';
+  // 어떤 분기로 빠지더라도 한 번만 — 가로 스크롤이 우측 끝(↩/최신 카테고리)
+  // 으로 맞춰지도록. rAF 가 같은 tick 의 appendChild 끝난 뒤에 실행되므로
+  // scrollWidth 가 정확하게 잡힌다. 분기마다 return 직전에 부르는 것보다 안전.
+  scrollActionPadToEnd();
   // If current sub-level lost all its targets (last monster died, etc.),
   // gracefully fall back to root rather than rendering an empty pane.
   if (actionPadLevel === 'attack' && attackableTargets().length === 0) actionPadLevel = 'root';
@@ -1706,9 +1734,11 @@ function renderActionPad() {
 
   if (actionPadLevel === 'magic-spells') {
     // 마법 선택 시 — 교전 중이면 곧바로 시전, 아니면 평소대로 타깃 선택으로.
+    // 라벨: 본문은 마법 이름만, MP 비용은 우상단 작은 superscript 로 분리.
+    // 「N MP」를 본문에서 떼어내 평균 버튼 폭을 30~40% 줄인다.
     for (const s of magicSpells()) {
       const cls = `action-target action-spell action-spell-${s.element}`;
-      pad.appendChild(makeActionBtn(`${s.name}·${s.mpCost}MP`, cls, () => {
+      pad.appendChild(makeSpellBtn(s.name, s.mpCost, cls, () => {
         const foe = combatFoeInRoom();
         if (foe) {
           appendLine(`> ${s.name} ${foe.name}`, 'line echo');
@@ -1762,6 +1792,15 @@ function renderActionPad() {
     actionPadLevel = 'root';
     renderActionPad();
   }));
+}
+
+// 가로 스크롤 패드 — 매 렌더 직후 우측 끝(가장 최근 추가된 카테고리/백 버튼)
+// 이 보이도록 스크롤 위치를 맞춘다. 컨테이너가 비거나 폭에 다 들어가면 no-op.
+function scrollActionPadToEnd() {
+  const pad = document.getElementById('action-pad');
+  if (!pad) return;
+  // rAF — DOM 추가 직후엔 layout 계산이 안 끝나 scrollWidth 가 0 일 수 있다.
+  requestAnimationFrame(() => { pad.scrollLeft = pad.scrollWidth; });
 }
 
 function setupActionPad() {

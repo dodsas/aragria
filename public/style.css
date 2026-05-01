@@ -671,14 +671,20 @@ body[data-sidebar="open"] #sidebar-toggle::before { content: '‹'; }
   }
   #action-pad {
     display: flex;
-    flex-wrap: wrap;
-    align-content: flex-end;
+    flex-wrap: nowrap;
     justify-content: flex-end;
     gap: 4px;
     max-width: calc(100% - 132px); /* leave room for the 3-col dpad on the left */
-    max-height: 64px;
-    overflow-y: auto;
+    /* 마법 N개로 폭이 넘쳐도 wrap/세로 스크롤 대신 가로 1줄 — 모바일에서 더
+       자연스러운 제스처. renderActionPad 가 마지막에 scrollLeft 를 끝으로
+       맞춰 백 버튼·새로 추가된 카테고리가 기본으로 보이게 한다. */
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
+  #action-pad::-webkit-scrollbar { display: none; }
   .dpad-btn,
   .action-btn {
     display: flex;
@@ -712,6 +718,27 @@ body[data-sidebar="open"] #sidebar-toggle::before { content: '‹'; }
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex-shrink: 0; /* nowrap 가로 스크롤에서 버튼이 짜부되지 않도록 */
+    scroll-snap-align: end;
+  }
+  /* 마법 버튼 — 본문은 이름만, MP 비용은 우상단 작은 superscript. 본문 폭이
+     평균 30~40% 짧아져 5~6 개까지 한 줄에 들어가는 빈도를 늘린다. */
+  .action-btn.action-spell { position: relative; padding-right: 16px; }
+  .action-btn .spell-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .action-btn .spell-mp {
+    position: absolute;
+    top: 1px;
+    right: 4px;
+    font-size: 9px;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: 0;
+    opacity: 0.85;
   }
   .action-btn.action-cat { background: var(--accent-soft); color: var(--bg); border-color: var(--accent); }
   .action-btn.action-cat-magic { background: #4d2d75; color: #fff; border-color: #b289ff; }
