@@ -61,6 +61,7 @@ function connect() {
     connStatus.textContent = '연결됨';
     connStatus.className = 'on';
     backoff = 500;
+    hidePolicyOverlay();
   });
 
   ws.addEventListener('message', (ev) => {
@@ -76,17 +77,29 @@ function connect() {
 
     if (code === 4001) {
       // Server force-closed because a newer connection took over this sid
-      // (typically: another tab opened with this account). Auto-reconnecting
-      // would create a fight between tabs — show terminal message instead.
+      // (typically: another tab/창 on the same PC — sid는 localStorage 공유).
+      // 자동 재연결은 두 탭 사이 다툼을 만들기 때문에 여기서 차단하고,
+      // 사용자가 명시적으로 "이 탭에서 다시 시작"을 누르면 그제야 connect().
       connStatus.textContent = '다른 탭에서 접속됨 — 이 탭은 종료됨';
+      showPolicyOverlay({
+        glyph: '⛔',
+        title: '중복 접속 차단',
+        msg: '같은 계정으로 다른 탭(또는 창)에서 새 접속이 감지되어<br/>이 탭의 연결이 종료되었습니다.',
+        sub: '한 PC에서는 한 캐릭터만 동시에 접속할 수 있어요. 이 탭에서 계속하려면 아래 버튼을 누르세요 — 다른 탭이 자동으로 끊어집니다.',
+        action: '이 탭에서 다시 시작',
+        onAction: () => { hidePolicyOverlay(); connect(); },
+      });
       return;
     }
     if (code === 4003) {
-      // Per-IP connection rate limit on server. Window is 10s; using a longer
-      // base delay here so we don't burn through the budget by retrying.
+      // Per-IP connection rate limit on server. 10초 sliding window 안에서
+      // 7번째 소켓이 거절됨 — 보통 새로고침 폭주/자동화 스크립트. 한 줄
+      // 토스트만 바뀌면 사용자가 "왜 안 들어가지" 하므로 풀스크린 안내로
+      // 명확히 보여주고, 카운트다운 후 자동 재시도하되 즉시 재시도 버튼도
+      // 제공한다.
       connStatus.textContent = '접속 빈도 제한 — 약 10초 후 자동 재시도';
-      setTimeout(connect, 10_000);
       backoff = 500;
+      startRateLimitOverlay();
       return;
     }
     if (code === 4002) {
@@ -163,6 +176,69 @@ function showServerUpdateModal() {
     confirmBtn.textContent = '새로고침 중…';
     location.reload();
   }, { once: true });
+}
+
+// 접속 차단(중복 접속·IP rate limit) 안내 오버레이. 사이드바 푸터의 한 줄
+// `#conn-status` 만으로는 본문 로그가 그대로 멈춰 있어 차단을 인지하기 어렵다.
+// 풀스크린으로 띄워 「왜 차단됐고 무엇을 하면 풀리는지」를 1차 메시지로 노출.
+let policyActionHandler = null;
+let policyTimer = null;
+function showPolicyOverlay({ glyph, title, msg, sub, action, onAction }) {
+  const overlay = document.getElementById('policy-overlay');
+  const glyphEl = document.getElementById('policy-glyph');
+  const titleEl = document.getElementById('policy-title');
+  const msgEl = document.getElementById('policy-msg');
+  const subEl = document.getElementById('policy-sub');
+  const btn = document.getElementById('policy-action');
+  if (!overlay || !btn) return;
+  if (glyphEl) glyphEl.textContent = glyph || '⛔';
+  if (titleEl) titleEl.textContent = title || '접속 차단';
+  if (msgEl) msgEl.innerHTML = msg || '';
+  if (subEl) {
+    if (sub) { subEl.innerHTML = sub; subEl.hidden = false; }
+    else { subEl.textContent = ''; subEl.hidden = true; }
+  }
+  btn.textContent = action || '확인';
+  btn.disabled = false;
+  if (policyActionHandler) btn.removeEventListener('click', policyActionHandler);
+  policyActionHandler = onAction || (() => hidePolicyOverlay());
+  btn.addEventListener('click', policyActionHandler);
+  overlay.hidden = false;
+  setTimeout(() => btn.focus(), 0);
+}
+function hidePolicyOverlay() {
+  const overlay = document.getElementById('policy-overlay');
+  if (overlay) overlay.hidden = true;
+  if (policyTimer) { clearInterval(policyTimer); policyTimer = null; }
+}
+
+// 4003(per-IP rate limit) 전용. 10초 카운트다운을 보여주면서 끝나면 자동
+// 재연결, 사용자가 「지금 재시도」를 누르면 즉시 connect(). 카운트다운 텍스트
+// 가 매초 갱신되도록 setInterval 로 정책 메시지 전체를 다시 그린다.
+function startRateLimitOverlay() {
+  let remaining = 10;
+  const render = () => {
+    showPolicyOverlay({
+      glyph: '⏳',
+      title: '접속 빈도 제한',
+      msg: `짧은 시간에 너무 많은 연결이 감지되어<br/>이 PC의 접속이 일시적으로 차단되었습니다.`,
+      sub: `약 <strong>${remaining}</strong>초 후 자동으로 다시 시도합니다. 새로고침을 반복하지 말고 잠시만 기다려 주세요.`,
+      action: '지금 재시도',
+      onAction: () => { hidePolicyOverlay(); connect(); },
+    });
+  };
+  render();
+  if (policyTimer) clearInterval(policyTimer);
+  policyTimer = setInterval(() => {
+    remaining -= 1;
+    if (remaining <= 0) {
+      clearInterval(policyTimer); policyTimer = null;
+      hidePolicyOverlay();
+      connect();
+      return;
+    }
+    render();
+  }, 1000);
 }
 
 function showWelcome() {

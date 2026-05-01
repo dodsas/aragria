@@ -119,6 +119,17 @@
       </div>
     </div>
   </div>
+  <div id="policy-overlay" hidden>
+    <div id="policy-card" role="alertdialog" aria-modal="true" aria-labelledby="policy-title">
+      <span id="policy-glyph" aria-hidden="true">⛔</span>
+      <h2 id="policy-title">접속 차단</h2>
+      <p id="policy-msg"></p>
+      <p id="policy-sub" class="policy-sub" hidden></p>
+      <div id="policy-actions">
+        <button type="button" id="policy-action"></button>
+      </div>
+    </div>
+  </div>
   <div id="settings-overlay" hidden>
     <div id="settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <h2 id="settings-title">설정</h2>
