@@ -1108,8 +1108,9 @@ export class Game {
   }
 
   // Dispatcher: resolve the target by name/id at fire time, prefer monsters
-  // then players. Self-targeting is rejected. Argless `attack` falls through
-  // to first live monster; never auto-targets a player.
+  // then players. Self-targeting is rejected. Argless `attack` prefers the
+  // currently-engaged monster(combatTargetId) and falls back to the first live
+  // monster only when none of those is in this room — never auto-targets a player.
   //
   // lastAttackAt is consumed here unconditionally — even on miss/no-target —
   // so a tampered client can't ping the resolver for free.
@@ -1139,7 +1140,17 @@ export class Game {
       return;
     }
 
-    const monster = monsters.find(m => !m.dead);
+    // 현재 교전 중인 몬스터가 같은 방에 살아 있다면 그쪽을 우선 — 모바일의
+    // 「선택지 없이 즉시 공격」 단축경로(액션 패드에서 공격 버튼 한 번)와
+    // PC 의 인자 없는 `attack` 둘 다 같은 의도(이미 상대가 있는데 또 고를
+    // 필요 없다)를 갖는다. fallback 은 기존 동작 — 방의 첫 번째 살아 있는
+    // 몬스터.
+    let monster = null;
+    if (player.combatTargetId && player.combatTargetId.startsWith('m')) {
+      const id = Number(player.combatTargetId.slice(1));
+      monster = monsters.find(m => m.id === id && !m.dead) || null;
+    }
+    if (!monster) monster = monsters.find(m => !m.dead);
     if (monster) return this._attackMonster(player, monster);
     this.send(player, { type: 'system', text: '공격할 대상이 없습니다.' });
   }
@@ -1311,7 +1322,12 @@ export class Game {
         return this.send(player, { type: 'system', text: `'${arg}'을(를) 찾을 수 없습니다.` });
       }
     } else {
-      target = monsters.find(m => !m.dead);
+      // attack 과 동일한 우선순위 — 교전 중이면 그 몬스터, 아니면 방의 첫 번째.
+      if (player.combatTargetId && player.combatTargetId.startsWith('m')) {
+        const id = Number(player.combatTargetId.slice(1));
+        target = monsters.find(m => m.id === id && !m.dead) || null;
+      }
+      if (!target) target = monsters.find(m => !m.dead);
       if (!target) {
         return this.send(player, { type: 'system', text: '시전할 대상이 없습니다.' });
       }

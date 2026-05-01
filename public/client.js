@@ -249,6 +249,11 @@ function scrollLogToBottom() {
 let combatDismissTimer = null;
 let lastCombat = { playerHp: null, foeHp: null };
 let inCombat = false;
+// 모바일 액션 패드의 「선택지 없이 바로 시전」 단축경로용 — 현재 교전 중인
+// foe 의 식별자를 캐싱한다. 서버 권위 원본이 아니라(서버는 별도 brodcast 안 함)
+// combat 메시지의 foe 페이로드를 그대로 쓰는 거울. fallen='foe' 또는 panel
+// 종료 시 null 로 비워 다음 액션 패드 렌더가 일반 타깃 리스트로 떨어지게.
+let currentCombatFoe = null;
 
 // 마법 시전 시 띄울 발사체 글리프(element 별). 색은 CSS .cv-elem-<element>
 // 의 drop-shadow 가 담당 — 글리프 자체는 element 정체성만 표현.
@@ -293,10 +298,22 @@ function renderCombat(combat) {
     combatViewEl.classList.remove('fading');
     lastCombat = { playerHp: null, foeHp: null };
     inCombat = false;
+    currentCombatFoe = null;
     scrollLogToBottom();
+    if (typeof renderActionPad === 'function') renderActionPad();
     return;
   }
   inCombat = true;
+  // foe 가 살아 있는 동안 캐시. fallen='foe'/'me' 모두 교전 종료로 보고 비운다
+  // (foe 가 죽었거나 내가 죽어 광장으로 튕긴 상황 — 다음 액션은 새 타깃 선택).
+  if (combat.foe && !combat.fallen) {
+    currentCombatFoe = {
+      name: combat.foe.name,
+      kind: combat.foe.kind || 'monster',
+    };
+  } else if (combat.fallen) {
+    currentCombatFoe = null;
+  }
   combatViewEl.hidden = false;
   combatViewEl.classList.remove('fading');
 
@@ -1301,6 +1318,18 @@ function magicTargets() {
   return currentRoomTargets.monsters || [];
 }
 
+// 「이미 교전 중이면 타깃 선택 단계를 건너뛴다」 단축경로 헬퍼.
+// 현재 교전 foe 가 같은 방의 몬스터 리스트에 그대로 있을 때만 직접 명령
+// 가능 — 이미 죽었거나 다른 방으로 가 버렸다면 null 을 돌려줘 액션 패드가
+// 정상적으로 타깃 리스트로 떨어지게 한다. 이름 일치로 매칭(서버 resolver
+// 가 받는 키와 동일).
+function combatFoeInRoom() {
+  if (!currentCombatFoe) return null;
+  if (currentCombatFoe.kind !== 'monster') return null;
+  const monsters = currentRoomTargets.monsters || [];
+  return monsters.find(m => m.name === currentCombatFoe.name) || null;
+}
+
 // 메뉴 노출용. spells 배열은 server status 가 권위. spell.element 를 그대로
 // 버튼 클래스로 끌어오면 자동으로 element 색이 입혀진다(action-spell-fire 등).
 function magicSpells() {
@@ -1332,7 +1361,14 @@ function renderActionPad() {
 
   if (actionPadLevel === 'root') {
     if (attackableTargets().length > 0) {
+      // 교전 중이면 타깃 리스트로 내려가지 않고 현재 foe 에게 즉시 공격.
       pad.appendChild(makeActionBtn('공격', 'action-cat', () => {
+        const foe = combatFoeInRoom();
+        if (foe) {
+          appendLine(`> 공격 ${foe.name}`, 'line echo');
+          sendCmd(`attack ${foe.name}`);
+          return;
+        }
         actionPadLevel = 'attack';
         renderActionPad();
       }));
@@ -1353,9 +1389,18 @@ function renderActionPad() {
   }
 
   if (actionPadLevel === 'magic-spells') {
+    // 마법 선택 시 — 교전 중이면 곧바로 시전, 아니면 평소대로 타깃 선택으로.
     for (const s of magicSpells()) {
       const cls = `action-target action-spell action-spell-${s.element}`;
       pad.appendChild(makeActionBtn(`${s.name}·${s.mpCost}MP`, cls, () => {
+        const foe = combatFoeInRoom();
+        if (foe) {
+          appendLine(`> ${s.name} ${foe.name}`, 'line echo');
+          sendCmd(`${s.name} ${foe.name}`);
+          actionPadLevel = 'root';
+          selectedSpell = null;
+          return;
+        }
         selectedSpell = s;
         actionPadLevel = 'magic-targets';
         renderActionPad();
