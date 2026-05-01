@@ -1247,7 +1247,16 @@ function setupSidebarResizer() {
   const RESIZER_W = 6;
   const MIN_SIDEBAR = 200;
   const MIN_VIEWPORT = 240;
+  const MOBILE_BP = 768; // style.css 의 @media (max-width: 768px) 와 동기.
   const STORAGE_KEY = 'aragria.sidebarWidth';
+
+  // 사용자가 의도한 사이드바 폭(드래그로 정한 값 또는 저장값). resize 시
+  // 매번 다시 적용하지만, 사용자의 원래 의도는 그대로 보존해 창을 다시
+  // 넓히면 그대로 펼쳐진다.
+  let desiredW = (() => {
+    const saved = Number(localStorage.getItem(STORAGE_KEY));
+    return Number.isFinite(saved) && saved > 0 ? saved : 0; // 0 = CSS 기본값(416px) 사용
+  })();
 
   const clampW = (w) => {
     const maxW = window.innerWidth - MIN_VIEWPORT - RESIZER_W;
@@ -1257,16 +1266,22 @@ function setupSidebarResizer() {
     app.style.gridTemplateColumns = `${clampW(w)}px ${RESIZER_W}px 1fr`;
   };
 
-  const saved = Number(localStorage.getItem(STORAGE_KEY));
-  if (Number.isFinite(saved) && saved > 0) applyW(saved);
+  // 모바일/데스크톱 모드 분기. 모바일 폭에서는 인라인 grid-template-columns
+  // 를 **반드시 제거**해야 @media 의 단일 컬럼 레이아웃이 살아난다 — 인라인
+  // 스타일이 미디어 쿼리보다 우선이라, 인라인을 두면 사이드바가 fixed 로
+  // 빠져도 1번 컬럼이 416px 를 그대로 점유해 viewport(프롬프트 영역)가
+  // 짜부라지는 게 이전 버그의 진짜 원인이었다.
+  const refresh = () => {
+    if (window.innerWidth <= MOBILE_BP) {
+      app.style.removeProperty('grid-template-columns');
+      return;
+    }
+    if (desiredW > 0) applyW(desiredW);
+    else app.style.removeProperty('grid-template-columns'); // 원래 CSS 기본
+  };
+  refresh();
 
-  // 창이 가로로 줄어들 때 사이드바 폭이 그대로 남아 있으면 #viewport(프롬프트
-  // 입력창이 있는 영역)가 0px 로 짜부라지고 사이드바 우측의 설정 버튼도
-  // 화면 밖으로 밀려난다. resize 가 발생할 때마다 현재 폭을 다시 clamp 해
-  // 둘 다 항상 보이도록 — saved 가 큰 값이어도 창 크기에 맞춰 자동 축소.
-  window.addEventListener('resize', () => {
-    applyW(sidebar.getBoundingClientRect().width);
-  });
+  window.addEventListener('resize', refresh);
 
   let dragging = false, startX = 0, startW = 0;
   resizer.addEventListener('pointerdown', (e) => {
@@ -1285,8 +1300,9 @@ function setupSidebarResizer() {
     dragging = false;
     if (e.pointerId != null) resizer.releasePointerCapture(e.pointerId);
     resizer.classList.remove('dragging');
+    desiredW = sidebar.getBoundingClientRect().width;
     try {
-      localStorage.setItem(STORAGE_KEY, String(Math.round(sidebar.getBoundingClientRect().width)));
+      localStorage.setItem(STORAGE_KEY, String(Math.round(desiredW)));
     } catch {}
   };
   resizer.addEventListener('pointerup', stop);
