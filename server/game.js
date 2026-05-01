@@ -820,6 +820,21 @@ export class Game {
     if (item.qty <= 0) player.inventory.splice(idx, 1);
     this.send(player, { type: 'text', text: msg });
     this.pushStatus(player);
+    // 교전 중에 회복 아이템을 쓰면 player.hp만 바뀌고 클라의 combat 패널은
+    // 다음 공격 틱까지 옛 HP로 남는다. 현재 교전 상대를 다시 찾아 즉시
+    // pushCombat으로 갱신해 회복이 실시간으로 보이도록.
+    if (player.combatTargetId) {
+      const tid = player.combatTargetId;
+      if (tid.startsWith('m')) {
+        const mid = Number(tid.slice(1));
+        const list = this.roomMonsters.get(player.roomId) || [];
+        const foe = list.find(m => m.id === mid && !m.dead);
+        if (foe) this.pushCombat(player, foe, 'monster');
+      } else if (tid.startsWith('p')) {
+        const foe = this.players.get(tid.slice(1));
+        if (foe) this.pushCombat(player, foe, 'player');
+      }
+    }
   }
 
   // Server-authoritative cooldown — see command.md. During cooldown the attack

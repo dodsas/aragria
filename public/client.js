@@ -106,6 +106,11 @@ function connect() {
   ws.addEventListener('error', () => ws.close());
 }
 
+// 서버 부팅 시각. 첫 연결에서 받아두고, 이후 재연결에서 다른 값이 오면
+// 배포가 일어난 것으로 간주해 페이지를 새로고침한다.
+let serverVersion = null;
+let serverUpdateTriggered = false;
+
 function handleMessage(msg) {
   switch (msg.type) {
     case 'text':    appendLine(msg.segments ?? msg.text, 'line'); break;
@@ -122,7 +127,21 @@ function handleMessage(msg) {
         PLAYER_SPRITES.set(msg.playerId, msg.svg);
       }
       break;
+    case 'server_info': handleServerInfo(msg.version); break;
   }
+}
+
+function handleServerInfo(version) {
+  if (typeof version !== 'number') return;
+  if (serverVersion == null) {
+    serverVersion = version;
+    return;
+  }
+  if (version === serverVersion || serverUpdateTriggered) return;
+  serverUpdateTriggered = true;
+  appendLine('서버 업데이트가 감지되었습니다. 새로고침합니다…', 'line system');
+  if (promptInput) promptInput.disabled = true;
+  setTimeout(() => location.reload(), 1500);
 }
 
 function showWelcome() {

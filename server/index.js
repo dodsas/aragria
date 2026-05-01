@@ -12,6 +12,9 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
+// 프로세스 부팅 시각을 서버 버전으로 사용. 클라가 재연결 후 이 값이 이전과
+// 달라지면 배포가 일어났다고 간주하고 새로고침한다.
+const SERVER_VERSION = Date.now();
 // Dev mode toggles relaxations for local testing — multi-tab session isolation
 // (client switches sid storage to sessionStorage so each tab is a distinct
 // player) and bypassing the per-IP connection rate so opening many tabs from
@@ -80,6 +83,7 @@ wss.on('connection', (socket, req) => {
 
   const player = game.attachPlayer(socket, sid);
   if (!player) return; // duplicate active session — game already closed the socket
+  try { socket.send(JSON.stringify({ type: 'server_info', version: SERVER_VERSION })); } catch {}
 
   socket.on('message', async (data) => {
     let msg;
