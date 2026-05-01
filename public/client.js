@@ -1260,6 +1260,14 @@ function setupSidebarResizer() {
   const saved = Number(localStorage.getItem(STORAGE_KEY));
   if (Number.isFinite(saved) && saved > 0) applyW(saved);
 
+  // 창이 가로로 줄어들 때 사이드바 폭이 그대로 남아 있으면 #viewport(프롬프트
+  // 입력창이 있는 영역)가 0px 로 짜부라지고 사이드바 우측의 설정 버튼도
+  // 화면 밖으로 밀려난다. resize 가 발생할 때마다 현재 폭을 다시 clamp 해
+  // 둘 다 항상 보이도록 — saved 가 큰 값이어도 창 크기에 맞춰 자동 축소.
+  window.addEventListener('resize', () => {
+    applyW(sidebar.getBoundingClientRect().width);
+  });
+
   let dragging = false, startX = 0, startW = 0;
   resizer.addEventListener('pointerdown', (e) => {
     dragging = true;
