@@ -23,6 +23,35 @@
         <span id="status-name">접속 중...</span>
       </header>
       <section class="status-block">
+        <h2>캐릭터</h2>
+        <div id="character-stats">
+          <div class="stat-row">
+            <span class="stat-label">직업</span>
+            <span class="stat-value" id="stat-class">-</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">레벨</span>
+            <span class="stat-value" id="stat-level">1</span>
+          </div>
+          <div class="stat-bar-row" id="stat-hp-row">
+            <span class="stat-label">체력</span>
+            <span class="stat-bar"><span class="stat-bar-fill stat-bar-hp" id="stat-hp-fill"></span></span>
+            <span class="stat-num" id="stat-hp-num">-/-</span>
+          </div>
+          <div class="stat-bar-row" id="stat-mp-row" hidden>
+            <span class="stat-label">마나</span>
+            <span class="stat-bar"><span class="stat-bar-fill stat-bar-mp" id="stat-mp-fill"></span></span>
+            <span class="stat-num" id="stat-mp-num">-/-</span>
+          </div>
+          <div class="stat-bar-row" id="stat-exp-row">
+            <span class="stat-label">경험</span>
+            <span class="stat-bar"><span class="stat-bar-fill stat-bar-exp" id="stat-exp-fill"></span></span>
+            <span class="stat-num" id="stat-exp-num">-/-</span>
+          </div>
+          <div class="stat-hint" id="stat-class-hint" hidden>광장에서 `전직 마법사` 가능</div>
+        </div>
+      </section>
+      <section class="status-block">
         <h2>장비</h2>
         <ul id="equipment"></ul>
       </section>

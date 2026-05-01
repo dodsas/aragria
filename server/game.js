@@ -26,6 +26,7 @@ const { rooms: ROOMS, objects: OBJECTS, spawns: INITIAL_SPAWNS } = loadZones();
 // Tier 1 = lowest. Higher tiers can be added later with their own respawn ranges.
 // hpRegen은 초당 자가 회복량. 0이면 회복 없음. 회복은 전투 중에도 적용되며,
 // 모든 동일 룸 플레이어에게 동기 브로드캐스트된다(monster.md 회복 절 참조).
+// expReward는 처치 보상 — 마지막 일격을 가한 플레이어 한 명만 받는다.
 const MONSTER_DEFS = {
   goblin: {
     tier: 1,
@@ -33,6 +34,7 @@ const MONSTER_DEFS = {
     icon: '🧌',
     desc: '작고 교활한 눈빛의 녹색 생명체. 녹슨 단검을 들고 있다.',
     hp: 20, maxHp: 20, atk: 5, hpRegen: 1,
+    expReward: 30,
   },
   skeleton: {
     tier: 1,
@@ -40,6 +42,7 @@ const MONSTER_DEFS = {
     icon: '☠',
     desc: '낡은 갑옷을 입은 뼈만 남은 전사. 텅 빈 눈구멍에서 붉은 빛이 흔들린다.',
     hp: 35, maxHp: 35, atk: 8, hpRegen: 1,
+    expReward: 60,
   },
   dragon: {
     tier: 2,
@@ -47,6 +50,7 @@ const MONSTER_DEFS = {
     icon: '🐉',
     desc: '숲 속 검은 제단에서 깨어난 비룡. 그을음으로 새카만 비늘 사이로 노란 눈이 어둠을 가른다.',
     hp: 120, maxHp: 120, atk: 18, hpRegen: 3,
+    expReward: 800,
   },
   red_dragon: {
     tier: 2,
@@ -54,8 +58,124 @@ const MONSTER_DEFS = {
     icon: '🐲',
     desc: '부서진 사당에 둥지를 튼 비룡. 비늘은 잿불처럼 붉고, 콧김에서 마른 연기가 새어나온다.',
     hp: 100, maxHp: 100, atk: 22, hpRegen: 3,
+    expReward: 600,
   },
 };
+
+// 직업 정의. novice 는 갓 입장한 모든 캐릭터의 기본 직업이고, 마법사는
+// 광장에서 레벨 10 도달 시 전직할 수 있는 첫 번째 분기. 새 직업을 추가할 때는
+// (1) 여기에 엔트리를 만들고 (2) class.md 직업 매트릭스에 한 줄 추가 +
+// (3) 필요하면 changeClass 의 허용 키 목록을 확장한다.
+const CLASS_DEFS = {
+  novice: {
+    name: '초보자',
+    desc: '아직 길을 정하지 않은 풋내기.',
+    // maxMp = mpAtLv1 + (level - 1) * mpPerLv. novice 는 마나 자원을 못 쓴다.
+    mpAtLv1: 0,
+    mpPerLv: 0,
+  },
+  mage: {
+    name: '마법사',
+    desc: '광장의 마법진에서 마나의 길을 받아들인 자.',
+    mpAtLv1: 30,
+    mpPerLv: 5,
+  },
+};
+
+// 마법 정의. 클라이언트가 모르는 단일 진실원이며, 입력은 (1) 텍스트(파이어볼 …)
+// (2) 모바일 마법 메뉴 양쪽에서 동일하게 cmd 'cast <spellId>' 형태로 도착한다
+// (multi-word 한국어 이름이 첫 단어 토큰화에 깨지지 않도록 _matchSpellPrefix가
+// 입력을 사전에 흡수해 표준 cmd 로 갈아끼운다 — magic.md 참조).
+//
+// element는 client tx-dmg-<element> CSS 클래스와 짝을 이룬다. 새 element 를
+// 추가하면 magic.md 와 style.css 의 색상 매트릭스를 같이 갱신할 것.
+const SPELL_DEFS = {
+  fireball: {
+    name: '파이어볼',
+    aliases: ['fireball', '화염구', '파이어 볼'],
+    minLevel: 10,
+    mpCost: 8,
+    dmg: [15, 25],
+    element: 'fire',
+    castVerb: '화염구를 쏘아',
+  },
+  ice_arrow: {
+    name: '아이스 애로우',
+    aliases: ['ice arrow', 'ice_arrow', '얼음 화살', '아이스애로우', '서리 화살'],
+    minLevel: 11,
+    mpCost: 10,
+    dmg: [20, 28],
+    element: 'ice',
+    castVerb: '서리 화살을 날려',
+  },
+  lightning: {
+    name: '번개',
+    aliases: ['lightning', '전격', 'thunder', '낙뢰'],
+    minLevel: 12,
+    mpCost: 14,
+    dmg: [25, 36],
+    element: 'lightning',
+    castVerb: '백색 번개를 내리꽂아',
+  },
+  skeleton_warrior: {
+    name: '해골 전사',
+    aliases: ['skeleton warrior', 'skeleton_warrior', '본 워리어', '뼈 전사', '해골전사'],
+    minLevel: 13,
+    mpCost: 20,
+    dmg: [32, 46],
+    element: 'dark',
+    castVerb: '소환된 해골 전사가 달려들어',
+  },
+  meteor: {
+    name: '메테오',
+    aliases: ['meteor', '운석', '유성', '운석우'],
+    minLevel: 14,
+    mpCost: 32,
+    dmg: [55, 80],
+    element: 'meteor',
+    castVerb: '하늘에서 운석을 떨어뜨려',
+  },
+};
+
+// 누적 경험치 테이블. EXP_TABLE[lv-1] = 레벨 lv 가 되기 위한 누적 경험치.
+// 1레벨은 0 부터 시작. 표 길이가 곧 레벨 캡(현재 15).
+// 분기 기준이 되는 10레벨 지점은 1620 — 고블린(30)/해골(60) 기준 약 27마리.
+const EXP_TABLE = [
+  0,        // L1
+  100,      // L2
+  220,      // L3
+  360,      // L4
+  520,      // L5
+  700,      // L6
+  900,      // L7
+  1120,     // L8
+  1360,     // L9
+  1620,     // L10  ← 전직 가능
+  2000,     // L11
+  2400,     // L12
+  2820,     // L13
+  3260,     // L14
+  3720,     // L15
+];
+const MAX_LEVEL = EXP_TABLE.length;
+
+function levelFromExp(exp) {
+  // 누적 exp 를 받아 현재 레벨을 돌려준다. 표 끝을 넘어가면 MAX_LEVEL 에 고정.
+  let level = 1;
+  for (let i = 0; i < EXP_TABLE.length; i++) {
+    if (exp >= EXP_TABLE[i]) level = i + 1;
+    else break;
+  }
+  return level;
+}
+function classMaxHp(/* klass */ _klass, level) {
+  // 직업에 무관한 공통 HP 성장. 미세 차이가 필요해지면 직업 정의로 빼면 된다.
+  return 100 + 10 * (level - 1);
+}
+function classMaxMp(klass, level) {
+  const def = CLASS_DEFS[klass] || CLASS_DEFS.novice;
+  return def.mpAtLv1 + (level - 1) * def.mpPerLv;
+}
 
 let nextMonsterId = 1;
 function spawnMonster(defId) {
@@ -147,6 +267,23 @@ export class Game {
       }
       if (anyChanged) this._pushRoomMonsters(roomId);
     }
+
+    // 플레이어 MP 회복 — 마법사 한정, 1초당 0.33씩 누적해 3초마다 정수 1.
+    // 만렙 마법사 1k 명이 모두 부족 상태여도 한 틱당 1k pushStatus(약 200KB
+    // 직렬화) 수준으로 1k 동시 접속 목표 안에서 안전. mp 가 가득 찬 플레이어는
+    // 틱 비용 0 — Math.min 분기로 push 도 생략된다.
+    if (!this._mpRegenAccum) this._mpRegenAccum = 0;
+    this._mpRegenAccum += perTickRatio; // perTickRatio 는 초 단위 비율(1.0=1초)
+    if (this._mpRegenAccum >= 3) {
+      this._mpRegenAccum = 0;
+      for (const p of this.players.values()) {
+        if (!p.registered || p.disconnectedAt != null) continue;
+        if (p.klass !== 'mage') continue;
+        if (p.mp >= p.maxMp) continue;
+        p.mp = Math.min(p.maxMp, p.mp + 1);
+        this.pushStatus(p);
+      }
+    }
   }
 
   // 같은 방의 모든 플레이어(교전·비교전 무관)에게 현재 룸 스냅샷을 보낸다.
@@ -226,6 +363,86 @@ export class Game {
     const killingBlow = monster.hp === 0 && hpBefore > 0;
     if (killingBlow) monster.dead = true;
     return { hpBefore, killingBlow };
+  }
+
+  // 처치 보상으로 경험치를 지급하고 누적 경험치가 다음 레벨 임계를 넘으면
+  // 자동으로 레벨업 처리한다. 레벨업은 maxHp/maxMp 를 직업 공식대로 다시
+  // 계산해 그 값으로 hp/mp 를 가득 채워주는 회복 보상을 함께 준다. 새로
+  // 해금되는 마법이 있으면 시스템 라인으로 공지. status 푸시는 마지막에
+  // 한 번만 — 같은 틱에 여러 번 보내지 않는다.
+  _grantExp(player, amount) {
+    if (!amount || amount <= 0) return;
+    if (player.level >= MAX_LEVEL) {
+      // 레벨 캡 도달 시 경험치 누적도 멈춘다 — 표 바깥으로 무한히 늘어나는
+      // 의미가 없다. 캡 확장은 EXP_TABLE 길이를 늘리는 것으로 충분.
+      return;
+    }
+    const before = player.level;
+    player.exp += amount;
+    this.send(player, { type: 'system', text: `${amount} 경험치를 얻었다. (${player.exp})` });
+    const after = Math.min(MAX_LEVEL, levelFromExp(player.exp));
+    if (after > before) {
+      player.level = after;
+      player.maxHp = classMaxHp(player.klass, after);
+      player.maxMp = classMaxMp(player.klass, after);
+      player.hp = player.maxHp;
+      player.mp = player.maxMp;
+      this.send(player, { type: 'system', text: `▲ 레벨 ${after} 달성! 체력과 마나가 가득 찼다.` });
+      // 새로 해금된 마법 안내 (마법사 한정)
+      if (player.klass === 'mage') {
+        for (const [, spell] of Object.entries(SPELL_DEFS)) {
+          if (spell.minLevel > before && spell.minLevel <= after) {
+            this.send(player, { type: 'system', text: `새 마법을 익혔다 — ${spell.name}` });
+          }
+        }
+      }
+      // 레벨 10 도달 + novice 인 경우 광장 전직 안내
+      if (before < 10 && after >= 10 && player.klass === 'novice' && player.roomId === 'square') {
+        this.send(player, { type: 'system', text: '광장의 마법진이 빛난다. `전직 마법사` 명령으로 마법사가 될 수 있다.' });
+      }
+    }
+    this.pushStatus(player);
+  }
+
+  // 광장에서 레벨 10 이상의 novice 만 직업을 바꿀 수 있다. 현재는 마법사 한
+  // 갈래만 분기로 열려 있다 — 새 직업이 들어오면 허용 키 매핑을 확장.
+  changeClass(player, raw) {
+    if (player.klass !== 'novice') {
+      return this.send(player, { type: 'system', text: '이미 전직했습니다.' });
+    }
+    if (player.level < 10) {
+      return this.send(player, { type: 'system', text: `전직은 레벨 10부터 가능합니다. (현재 ${player.level})` });
+    }
+    if (player.roomId !== 'square') {
+      return this.send(player, { type: 'system', text: '전직은 광장에서만 가능합니다.' });
+    }
+    const arg = String(raw || '').trim().toLowerCase();
+    // 허용 키: 한국어 직업명 + 영문 id
+    const map = { '마법사': 'mage', 'mage': 'mage' };
+    const target = map[arg];
+    if (!target) {
+      const options = Object.entries(CLASS_DEFS)
+        .filter(([id]) => id !== 'novice')
+        .map(([, def]) => def.name)
+        .join(', ');
+      return this.send(player, { type: 'system', text: `전직 가능한 직업: ${options}. 사용법: \`전직 마법사\`` });
+    }
+    player.klass = target;
+    player.maxHp = classMaxHp(target, player.level);
+    player.maxMp = classMaxMp(target, player.level);
+    player.hp = player.maxHp;
+    player.mp = player.maxMp;
+    const name = CLASS_DEFS[target].name;
+    this.send(player, { type: 'system', text: `${name}로 전직했다. 광장의 마법진이 푸르게 타오른다.` });
+    this.broadcastRoom('square', { type: 'text', text: `${player.name}님이 ${name}로 전직했다.` }, player.id);
+    // 마법사 전직 시 1레벨 마법(파이어볼)이 즉시 해금되므로 안내.
+    if (target === 'mage') {
+      const firstSpell = Object.values(SPELL_DEFS).find(s => s.minLevel <= player.level);
+      if (firstSpell) {
+        this.send(player, { type: 'system', text: `첫 마법: ${firstSpell.name} (\`${firstSpell.name} <대상>\`로 시전)` });
+      }
+    }
+    this.pushStatus(player);
   }
 
   // PvP analog to applyMonsterDamage. Same atomicity guarantees: synchronous
@@ -351,11 +568,19 @@ export class Game {
       socket,
       roomId: null,
       spriteSvg: null,
-      hp: 100,
-      maxHp: 100,
+      // HP/MP 기본값은 직업+레벨 함수로 계산. novice + level 1 → maxHp 100, maxMp 0.
+      hp: classMaxHp('novice', 1),
+      maxHp: classMaxHp('novice', 1),
+      mp: classMaxMp('novice', 1),
+      maxMp: classMaxMp('novice', 1),
       icon: '🧙',
       equipment: STARTING_EQUIPMENT(),
       inventory: STARTING_INVENTORY(),
+      // 직업·성장. klass='novice' 는 출발 직업. 광장에서 레벨 10 도달 시
+      // 전직 명령(`전직 마법사`)으로 'mage'로 전환된다.
+      level: 1,
+      exp: 0,
+      klass: 'novice',
       combatTargetId: null,
       downed: false,
       lastAttackAt: 0,
@@ -549,6 +774,16 @@ export class Game {
     // a 4 KiB `look` arg otherwise).
     const input = String(raw || '').slice(0, INPUT_MAX_LEN).trim();
     if (!input) return;
+
+    // 마법 이름은 다단어("해골 전사")가 흔해 첫 단어 토큰화로는 깨진다.
+    // 입력 전체를 등록된 spell 이름·alias 와 prefix-match 해 매칭 시 표준
+    // (cmd='cast' arg='<spellId> <rest>') 형태로 변환. 새 spell 을 추가해도
+    // 디스패처는 건드릴 필요 없다.
+    const spellMatch = this._matchSpellPrefix(input);
+    if (spellMatch) {
+      return this.castSpell(player, spellMatch.spellId, spellMatch.rest);
+    }
+
     const [cmd, ...rest] = input.split(/\s+/);
     const arg = rest.join(' ').trim();
 
@@ -568,9 +803,19 @@ export class Game {
       case 'use':
       case '사용': case '사용하다': case '써': case '쓰다': case '먹다':
         return this.useItem(player, arg);
+      case '전직': case '전직하다': case 'class': case 'job': case 'change-class':
+        return this.changeClass(player, arg);
+      case 'cast': case '시전': case '시전하다': case '마법': {
+        // `시전 <spell>` 명시 명령은 한 번 더 prefix-match 한다 — 취향대로
+        // 「시전 파이어볼 고블린」 처럼 쓸 수 있게 하기 위함.
+        if (!arg) return this.send(player, { type: 'system', text: '시전할 마법 이름이 필요합니다.' });
+        const m = this._matchSpellPrefix(arg);
+        if (!m) return this.send(player, { type: 'system', text: '알 수 없는 마법입니다.' });
+        return this.castSpell(player, m.spellId, m.rest);
+      }
       case 'help':
       case '도움말': case '도움': case '명령어': case '명령':
-        return this.send(player, { type: 'text', text: '명령: 보기 [대상], 이동 <방향>, 공격 <대상/플레이어>, 말 <내용>, 사용 <아이템>, 도움말' });
+        return this.send(player, { type: 'text', text: '명령: 보기 [대상], 이동 <방향>, 공격 <대상/플레이어>, 말 <내용>, 사용 <아이템>, 전직 <직업>, <마법명> <대상>, 도움말' });
       default:
         if (['north','south','east','west','n','s','e','w','북','남','동','서','북쪽','남쪽','동쪽','서쪽'].includes(cmd)) {
           return this.move(player, cmd);
@@ -960,6 +1205,9 @@ export class Game {
       player.combatTargetId = null;
       // 죽은 몬스터를 룸 몬스터 패널에서 즉시 제거.
       this._pushRoomMonsters(roomId);
+      // 처치 보상은 마지막 일격을 가한 한 명만. _grantExp 가 레벨업·푸시까지 처리.
+      const expReward = MONSTER_DEFS[target.defId]?.expReward || 0;
+      if (expReward > 0) this._grantExp(player, expReward);
       if (killStealVictimName) {
         // Anti-grief: kill-stealer can't immediately walk away. Cancel any
         // queued move first — otherwise it would auto-fire under the block.
@@ -999,6 +1247,172 @@ export class Game {
     this.pushCombat(player, target, 'monster');
     this.pushStatus(player);
     // 비교전 룸메이트도 HP 바 변화를 보도록 룸 전체에 갱신 푸시.
+    this._pushRoomMonsters(player.roomId);
+  }
+
+  // 입력 전체를 SPELL_DEFS 의 이름·alias 와 prefix-match. 다단어 한국어
+  // 마법명("해골 전사 고블린")이 첫 단어 토큰화에 깨지지 않도록 디스패처보다
+  // 먼저 호출된다. 더 긴 alias 가 짧은 alias 의 prefix 인 경우(예: "파이어 볼"
+  // / "파이어볼") 긴 쪽을 먼저 시도하기 위해 길이 내림차순으로 검사.
+  _matchSpellPrefix(input) {
+    if (!input) return null;
+    const trimmed = input.trim();
+    const lo = trimmed.toLowerCase();
+    const candidates = [];
+    for (const [id, spell] of Object.entries(SPELL_DEFS)) {
+      candidates.push({ id, key: spell.name.toLowerCase() });
+      for (const a of spell.aliases || []) candidates.push({ id, key: a.toLowerCase() });
+    }
+    candidates.sort((a, b) => b.key.length - a.key.length);
+    for (const c of candidates) {
+      if (lo === c.key) return { spellId: c.id, rest: '' };
+      if (lo.startsWith(c.key + ' ')) {
+        return { spellId: c.id, rest: trimmed.slice(c.key.length).trim() };
+      }
+    }
+    return null;
+  }
+
+  // 마법 시전. 공격과 비슷한 라이프사이클(쿨다운 → 대상 해소 → 데미지 →
+  // 반격 → 처치 처리)을 따르되 다음 셋이 다르다:
+  //  1) 클래스/레벨/MP 게이트가 추가됨.
+  //  2) 데미지 출력 segment 에 spell 의 element 별 cls(`tx-dmg-<element>`)를
+  //     붙여 클라이언트가 마법별 고유 색으로 데미지를 칠하게 한다.
+  //  3) 쿨다운은 attack 과 같은 lastAttackAt 슬롯을 공유 — 마법으로 공격
+  //     쿨다운을 우회하지 못하게.
+  castSpell(player, spellId, arg) {
+    const spell = SPELL_DEFS[spellId];
+    if (!spell) {
+      return this.send(player, { type: 'system', text: '알 수 없는 마법입니다.' });
+    }
+    if (player.klass !== 'mage') {
+      return this.send(player, { type: 'system', text: '마법은 마법사만 시전할 수 있습니다.' });
+    }
+    if (player.level < spell.minLevel) {
+      return this.send(player, { type: 'system', text: `${spell.name} — 레벨 ${spell.minLevel} 이상 필요. (현재 ${player.level})` });
+    }
+    if (player.mp < spell.mpCost) {
+      return this.send(player, { type: 'system', text: `마나가 부족합니다. (${player.mp}/${player.maxMp}, 필요 ${spell.mpCost})` });
+    }
+    const now = Date.now();
+    const elapsed = now - player.lastAttackAt;
+    if (elapsed < ATTACK_COOLDOWN_MS) {
+      const remainSec = ((ATTACK_COOLDOWN_MS - elapsed) / 1000).toFixed(1);
+      return this.send(player, { type: 'system', text: `${remainSec}초 후 시전 가능합니다.` });
+    }
+
+    const monsters = this.roomMonsters.get(player.roomId) || [];
+    let target = null;
+    if (arg) {
+      target = monsters.find(m => !m.dead && (
+        m.name === arg || m.defId === arg || (arg.length >= 2 && m.name.includes(arg))
+      ));
+      if (!target) {
+        return this.send(player, { type: 'system', text: `'${arg}'을(를) 찾을 수 없습니다.` });
+      }
+    } else {
+      target = monsters.find(m => !m.dead);
+      if (!target) {
+        return this.send(player, { type: 'system', text: '시전할 대상이 없습니다.' });
+      }
+    }
+
+    // 비용 차감과 시전 시각 기록 — 쿨다운 게이트는 attack 과 공유.
+    player.lastAttackAt = now;
+    player.mp -= spell.mpCost;
+    player.combatTargetId = `m${target.id}`;
+    this.send(player, { type: 'view', view: null });
+
+    const [dmin, dmax] = spell.dmg;
+    // 레벨에 따른 약한 보너스(2레벨당 +1) — 후반 마법에 비례 가중되지 않도록 작게.
+    const bonus = Math.floor((player.level - spell.minLevel) / 2);
+    const dmg = Math.max(1, Math.floor(Math.random() * (dmax - dmin + 1)) + dmin + bonus);
+    const { killingBlow } = this.applyMonsterDamage(target, dmg);
+
+    const dmgCls = `tx-dmg-${spell.element}`;
+    this.seg(player, [
+      { text: `${spell.castVerb} ` },
+      { text: target.name, cls: 'monster-name' },
+      { text: '에게 ' },
+      { text: String(dmg), cls: dmgCls },
+      { text: '의 피해를 입혔다.' },
+    ]);
+
+    // 같은 몬스터 교전 중인 다른 플레이어들도 본다 — _attackMonster 패턴과 동일.
+    const engagementKey = `m${target.id}`;
+    let killStealVictimName = null;
+    let killStealVictimId = null;
+    for (const p of this.players.values()) {
+      if (p.id === player.id) continue;
+      if (p.roomId !== player.roomId) continue;
+      if (p.combatTargetId !== engagementKey) continue;
+      this.seg(p, [
+        { text: player.name, cls: 'tx-player' },
+        { text: `의 ${spell.name}이(가) ` },
+        { text: target.name, cls: 'monster-name' },
+        { text: '에게 ' },
+        { text: String(dmg), cls: dmgCls },
+        { text: '의 피해를 입혔다.' },
+      ]);
+      if (killingBlow) {
+        this.seg(p, [
+          { text: target.name, cls: 'monster-name' },
+          { text: '이(가) ' },
+          { text: player.name, cls: 'tx-player' },
+          { text: '님에게 쓰러졌다.' },
+        ]);
+        if (!killStealVictimName) {
+          killStealVictimName = p.name;
+          killStealVictimId = p.id;
+        }
+      }
+      this.pushCombat(p, target, 'monster', killingBlow ? 'foe' : null, killingBlow ? player.name : null);
+      if (killingBlow) p.combatTargetId = null;
+    }
+
+    if (killingBlow) {
+      const roomId = player.roomId;
+      const list = this.roomMonsters.get(roomId);
+      list.splice(list.indexOf(target), 1);
+      this.seg(player, [{ text: target.name, cls: 'monster-name' }, { text: '이(가) 쓰러졌다!' }]);
+      this.pushCombat(player, target, 'monster', 'foe');
+      player.combatTargetId = null;
+      this._pushRoomMonsters(roomId);
+      const expReward = MONSTER_DEFS[target.defId]?.expReward || 0;
+      if (expReward > 0) this._grantExp(player, expReward);
+      if (killStealVictimName) {
+        if (player.pendingMove) {
+          clearTimeout(player.pendingMove.timer);
+          player.pendingMove = null;
+        }
+        player.moveBlockedUntil = Date.now() + KILLSTEAL_MOVE_BLOCK_MS;
+        player.moveBlockedBy = killStealVictimName;
+        player.moveBlockedById = killStealVictimId;
+        const sec = Math.ceil(KILLSTEAL_MOVE_BLOCK_MS / 1000);
+        this.send(player, { type: 'system', text: `${killStealVictimName}님이 당신의 이동을 방해중입니다. (${sec}초 후 이동가능)` });
+      }
+      this.scheduleRespawn(roomId, target.defId);
+      return;
+    }
+
+    // 마법으로도 반격은 받는다 — attack 과 동일.
+    const dmgIn = Math.floor(Math.random() * target.atk) + 1;
+    player.hp = Math.max(0, player.hp - dmgIn);
+    this.seg(player, [
+      { text: target.name, cls: 'monster-name' },
+      { text: `이(가) 반격해 ${dmgIn}의 피해를 입혔다. 체력: ${player.hp}/${player.maxHp}` },
+    ]);
+
+    if (player.hp <= 0) {
+      const fromRoom = player.roomId;
+      this.send(player, { type: 'system', text: '의식을 잃고 쓰러졌다...' });
+      this.pushCombat(player, target, 'monster', 'me');
+      this._respawnAtSquare(player);
+      this._pushRoomMonsters(fromRoom);
+      return;
+    }
+    this.pushCombat(player, target, 'monster');
+    this.pushStatus(player);
     this._pushRoomMonsters(player.roomId);
   }
 
@@ -1155,6 +1569,28 @@ export class Game {
   }
 
   pushStatus(player) {
+    const klassDef = CLASS_DEFS[player.klass] || CLASS_DEFS.novice;
+    // 누적 exp 를 현재 레벨 구간 내 진행도로 변환해 클라이언트가 바로 바로
+    // 그릴 수 있게 한다. 마지막 레벨에서는 expNext=0 으로 만렙 표시.
+    const lvIdx = Math.min(player.level - 1, EXP_TABLE.length - 1);
+    const baseExp = EXP_TABLE[lvIdx];
+    const nextExp = lvIdx + 1 < EXP_TABLE.length ? EXP_TABLE[lvIdx + 1] : null;
+    const expCur = Math.max(0, player.exp - baseExp);
+    const expNext = nextExp == null ? 0 : Math.max(1, nextExp - baseExp);
+
+    // 클라 마법 메뉴 채우기용 — 현재 레벨에서 시전 가능한 마법만 노출.
+    // 새로 잠금해제된 마법은 _grantExp 가 system 라인으로 별도 안내.
+    const spells = [];
+    if (player.klass === 'mage') {
+      for (const [id, s] of Object.entries(SPELL_DEFS)) {
+        if (player.level >= s.minLevel) {
+          spells.push({
+            id, name: s.name, mpCost: s.mpCost, element: s.element, minLevel: s.minLevel,
+          });
+        }
+      }
+    }
+
     this.send(player, {
       type: 'status',
       status: {
@@ -1162,6 +1598,18 @@ export class Game {
         roomId: player.roomId,
         equipment: player.equipment,
         inventory: player.inventory,
+        level: player.level,
+        exp: expCur,
+        expNext,
+        hp: player.hp,
+        maxHp: player.maxHp,
+        mp: player.mp,
+        maxMp: player.maxMp,
+        klass: player.klass,
+        klassName: klassDef.name,
+        spells,
+        // 광장에서 레벨 10 이상의 novice 만 전직 가능 — 클라 안내 배지에 사용.
+        canChangeClass: player.klass === 'novice' && player.level >= 10 && player.roomId === 'square',
       },
     });
   }

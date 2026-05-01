@@ -696,9 +696,65 @@ function appendLine(content, cls = 'line') {
   scrollLogToBottom();
 }
 
+// 마법 메뉴(모바일 액션 패드)에서 사용할 가장 최근 spell 목록.
+// 서버 status 가 권위적이며, renderStatus 가 매번 갱신한다.
+let currentSpells = [];
+
+function setBar(fillEl, numEl, cur, max) {
+  if (!fillEl || !numEl) return;
+  const total = Math.max(1, max || 0);
+  const pct = Math.max(0, Math.min(100, (cur / total) * 100));
+  fillEl.style.width = `${pct}%`;
+  numEl.textContent = `${cur}/${max || 0}`;
+}
+
 function renderStatus(status) {
   if (!status) return;
   statusName.textContent = status.name;
+
+  // 캐릭터 스탯 블록. 서버가 hp/mp/level/exp/klassName 을 권위로 보낸다.
+  // mp 가 0 이하인 직업(novice)은 마나 행 자체를 숨겨 시각적 노이즈를 줄임.
+  const classEl = document.getElementById('stat-class');
+  const levelEl = document.getElementById('stat-level');
+  const hpRow = document.getElementById('stat-hp-row');
+  const mpRow = document.getElementById('stat-mp-row');
+  const expRow = document.getElementById('stat-exp-row');
+  const classHint = document.getElementById('stat-class-hint');
+  if (classEl) classEl.textContent = status.klassName || '-';
+  if (levelEl) levelEl.textContent = `Lv. ${status.level || 1}`;
+  if (hpRow) {
+    setBar(document.getElementById('stat-hp-fill'), document.getElementById('stat-hp-num'),
+           status.hp ?? 0, status.maxHp ?? 0);
+  }
+  if (mpRow) {
+    if ((status.maxMp || 0) > 0) {
+      mpRow.hidden = false;
+      setBar(document.getElementById('stat-mp-fill'), document.getElementById('stat-mp-num'),
+             status.mp ?? 0, status.maxMp ?? 0);
+    } else {
+      mpRow.hidden = true;
+    }
+  }
+  if (expRow) {
+    if ((status.expNext || 0) > 0) {
+      expRow.hidden = false;
+      setBar(document.getElementById('stat-exp-fill'), document.getElementById('stat-exp-num'),
+             status.exp ?? 0, status.expNext ?? 0);
+    } else {
+      // 만렙 — exp 행을 'MAX' 로 고정 표시.
+      expRow.hidden = false;
+      const fill = document.getElementById('stat-exp-fill');
+      const num = document.getElementById('stat-exp-num');
+      if (fill) fill.style.width = '100%';
+      if (num) num.textContent = 'MAX';
+    }
+  }
+  if (classHint) classHint.hidden = !status.canChangeClass;
+
+  // 모바일 마법 메뉴를 채울 spell 목록 캐싱. 서버 status 가 클라 권위 원본.
+  currentSpells = Array.isArray(status.spells) ? status.spells : [];
+  // 액션 패드가 떠 있는 동안 새 마법이 해금되거나 mp 가 변하면 즉시 반영.
+  if (typeof renderActionPad === 'function') renderActionPad();
 
   equipmentEl.innerHTML = '';
   for (const [slot, label] of EQUIP_SLOTS) {
@@ -1170,14 +1226,15 @@ function setupDpad() {
   });
 }
 
-// Hierarchical action pad. Root level shows category buttons (공격 / 봐) only
-// for categories with at least one valid target in the current room. Tapping
-// a category descends into a target list rendered from server-pushed
-// room_monsters payload (monsters/objects/players). Tapping a target sends
-// `<verb> <name>` and returns to root. A back button (↩) at the bottom of
-// any sub-level returns to root without firing a command.
+// Hierarchical action pad. Root level shows category buttons (공격 / 봐 / 마법)
+// only for categories with at least one valid action in the current room.
+// 'attack'/'look' descend one level into target selection. 'magic' descends
+// two levels — first the spell list (filtered to spells the player has and
+// can afford), then the target list. Tapping a leaf fires the command and
+// returns to root. The back button (↩) returns one step.
 let currentRoomTargets = { monsters: [], objects: [], players: [] };
-let actionPadLevel = 'root'; // 'root' | 'attack' | 'look'
+let actionPadLevel = 'root'; // 'root' | 'attack' | 'look' | 'magic-spells' | 'magic-targets'
+let selectedSpell = null;    // { id, name, mpCost, ... } when in magic-targets
 
 function attackableTargets() {
   // Players are technically valid attack targets server-side, but we
@@ -1191,6 +1248,18 @@ function lookableTargets() {
     ...(currentRoomTargets.objects || []),
     ...(currentRoomTargets.players || []),
   ];
+}
+
+// 마법 시전 가능한 대상은 몬스터로 한정 — PvP 마법은 의도적으로 모바일 메뉴에서
+// 노출하지 않는다(공격 카테고리와 동일한 안전장치).
+function magicTargets() {
+  return currentRoomTargets.monsters || [];
+}
+
+// 메뉴 노출용. spells 배열은 server status 가 권위. spell.element 를 그대로
+// 버튼 클래스로 끌어오면 자동으로 element 색이 입혀진다(action-spell-fire 등).
+function magicSpells() {
+  return Array.isArray(currentSpells) ? currentSpells : [];
 }
 
 function makeActionBtn(label, cls, onClick) {
@@ -1210,6 +1279,11 @@ function renderActionPad() {
   // gracefully fall back to root rather than rendering an empty pane.
   if (actionPadLevel === 'attack' && attackableTargets().length === 0) actionPadLevel = 'root';
   if (actionPadLevel === 'look' && lookableTargets().length === 0) actionPadLevel = 'root';
+  if (actionPadLevel === 'magic-spells' && magicSpells().length === 0) actionPadLevel = 'root';
+  if (actionPadLevel === 'magic-targets' && magicTargets().length === 0) {
+    actionPadLevel = 'magic-spells';
+    if (magicSpells().length === 0) actionPadLevel = 'root';
+  }
 
   if (actionPadLevel === 'root') {
     if (attackableTargets().length > 0) {
@@ -1224,6 +1298,46 @@ function renderActionPad() {
         renderActionPad();
       }));
     }
+    if (magicSpells().length > 0 && magicTargets().length > 0) {
+      pad.appendChild(makeActionBtn('마법', 'action-cat action-cat-magic', () => {
+        actionPadLevel = 'magic-spells';
+        renderActionPad();
+      }));
+    }
+    return;
+  }
+
+  if (actionPadLevel === 'magic-spells') {
+    for (const s of magicSpells()) {
+      const cls = `action-target action-spell action-spell-${s.element}`;
+      pad.appendChild(makeActionBtn(`${s.name}·${s.mpCost}MP`, cls, () => {
+        selectedSpell = s;
+        actionPadLevel = 'magic-targets';
+        renderActionPad();
+      }));
+    }
+    pad.appendChild(makeActionBtn('↩', 'action-back', () => {
+      actionPadLevel = 'root';
+      renderActionPad();
+    }));
+    return;
+  }
+
+  if (actionPadLevel === 'magic-targets') {
+    const spell = selectedSpell;
+    for (const t of magicTargets()) {
+      pad.appendChild(makeActionBtn(t.name, `action-target action-spell-${spell?.element || 'fire'}`, () => {
+        appendLine(`> ${spell.name} ${t.name}`, 'line echo');
+        sendCmd(`${spell.name} ${t.name}`);
+        actionPadLevel = 'root';
+        selectedSpell = null;
+        renderActionPad();
+      }));
+    }
+    pad.appendChild(makeActionBtn('↩', 'action-back', () => {
+      actionPadLevel = 'magic-spells';
+      renderActionPad();
+    }));
     return;
   }
 

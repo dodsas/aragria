@@ -72,6 +72,15 @@ body {
 #log .tx-label  { color: var(--c-label); text-transform: none; }
 #log .tx-quote  { color: var(--c-room); font-style: italic; }
 
+/* 마법 데미지는 element 별 고유 색으로 칠한다. 직관적으로 "fire 는 항상
+   주황빛" 처럼 인식되도록 의도적으로 테마에 휘둘리지 않는 고정 RGB. 새
+   element 추가 시 magic.md 의 색상 매트릭스도 함께 갱신할 것. */
+#log .tx-dmg-fire      { color: #ff6b35; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 0 6px rgba(255, 107, 53, 0.45); }
+#log .tx-dmg-ice       { color: #6dd5ed; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 0 6px rgba(109, 213, 237, 0.45); }
+#log .tx-dmg-lightning { color: #f7e07c; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 0 6px rgba(247, 224, 124, 0.55); }
+#log .tx-dmg-dark      { color: #b289ff; font-weight: 700; font-variant-numeric: tabular-nums; text-shadow: 0 0 6px rgba(178, 137, 255, 0.5); }
+#log .tx-dmg-meteor    { color: #ff4848; font-weight: 800; font-variant-numeric: tabular-nums; text-shadow: 0 0 8px rgba(255, 72, 72, 0.6); }
+
 /* ── Combat panel (Dragon Knight 2 style) ──────────────── */
 #combat-view {
   flex-shrink: 0;
@@ -340,6 +349,59 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
 .status-block li[data-item-id]:hover { background: var(--bg-elev); }
 .status-block li[data-item-id]:active { background: var(--accent-soft); }
 
+/* ── Character stats (level / hp / mp / exp) ──────────── */
+#character-stats { display: grid; gap: 4px; }
+.stat-row {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 8px;
+  font-size: 12px;
+  align-items: center;
+}
+.stat-row .stat-label,
+.stat-bar-row .stat-label { color: var(--fg-dim); font-size: 11px; letter-spacing: 0.04em; }
+.stat-row .stat-value { color: var(--fg); font-size: 12px; }
+.stat-bar-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 56px;
+  gap: 8px;
+  align-items: center;
+}
+.stat-bar-row[hidden] { display: none; }
+.stat-bar {
+  height: 8px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  display: block;
+}
+.stat-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  transition: width 0.15s ease;
+}
+.stat-bar-hp { background: var(--c-hp); }
+.stat-bar-mp { background: var(--c-room); }
+.stat-bar-exp { background: var(--accent); }
+.stat-num {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--fg-dim);
+  text-align: right;
+}
+.stat-hint {
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: var(--bg-elev);
+  border-left: 2px solid var(--accent);
+  border-radius: 2px;
+  font-size: 11px;
+  color: var(--accent);
+}
+.stat-hint[hidden] { display: none; }
+
 /* ── Map ───────────────────────────────────────────────── */
 #map-canvas {
   position: relative;
@@ -579,7 +641,14 @@ body[data-sidebar="open"] #sidebar-toggle::before { content: '‹'; }
     text-overflow: ellipsis;
   }
   .action-btn.action-cat { background: var(--accent-soft); color: var(--bg); border-color: var(--accent); }
+  .action-btn.action-cat-magic { background: #4d2d75; color: #fff; border-color: #b289ff; }
   .action-btn.action-back { background: transparent; color: var(--fg-dim); }
+  /* element 별 마법 버튼 — 데미지 색과 짝을 맞춰 인식 일관성 유지 */
+  .action-btn.action-spell-fire      { background: #5a1a08; color: #ffd0b8; border-color: #ff6b35; }
+  .action-btn.action-spell-ice       { background: #0a3a48; color: #d6f3fb; border-color: #6dd5ed; }
+  .action-btn.action-spell-lightning { background: #4a3e08; color: #fff5c4; border-color: #f7e07c; }
+  .action-btn.action-spell-dark      { background: #2a1a4d; color: #e2d6ff; border-color: #b289ff; }
+  .action-btn.action-spell-meteor    { background: #5a0e0e; color: #ffd6d6; border-color: #ff4848; }
   #sidebar-toggle { display: inline-flex; }
   body[data-sidebar="open"] #sidebar-toggle {
     left: min(85vw, 340px);
