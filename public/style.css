@@ -1,23 +1,8 @@
+/* 색상 토큰은 themes/<name>.css 에서 [data-theme="<name>"] 셀렉터로 정의된다.
+   여기에는 색과 무관한 글로벌 토큰만 둔다. 새 테마 추가 시 themes/ 아래에
+   파일을 만들고 index.html 에서 link 로 로드 + client.js 의 THEMES 목록에
+   엔트리를 추가하면 된다. */
 :root {
-  --bg: #0e0f12;
-  --bg-panel: #15171c;
-  --bg-elev: #1c1f26;
-  --fg: #d8d4c8;
-  --fg-dim: #8a8578;
-  --accent: #c9a14a;
-  --accent-soft: #6e5a2a;
-  --danger: #b3543a;
-  --ok: #5e9b5b;
-  --border: #2a2d35;
-  /* Text-log highlight palette */
-  --c-room: #6db3c4;
-  --c-item: #b289d4;
-  --c-hp: #7cc77a;
-  --c-dmg: #e0a04a;
-  --c-dir: #d4c25e;
-  --c-player: #7da7d8;
-  --c-monster: #e07b8c;
-  --c-label: #9aa3ac;
   --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -436,9 +421,30 @@ body[data-mode="move"] #prompt::placeholder { color: var(--ok); }
   padding: 8px 16px;
   border-top: 1px solid var(--border);
   font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 #conn-status.on { color: var(--ok); }
 #conn-status.off { color: var(--danger); }
+#settings-open {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg-dim);
+  font-size: 14px;
+  line-height: 1;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.1s, border-color 0.1s, background 0.1s;
+}
+#settings-open:hover {
+  color: var(--accent);
+  border-color: var(--accent-soft);
+  background: var(--bg-elev);
+}
 
 /* ── Mobile touch controls (hidden on desktop) ─────────── */
 #touch-controls { display: none; }
@@ -681,3 +687,106 @@ body[data-sidebar="open"] #sidebar-toggle::before { content: '‹'; }
   border-color: rgba(70, 140, 200, 0.4);
   color: #b8d4ec;
 }
+
+/* ── Settings overlay ──────────────────────────────────────── */
+#settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(8, 12, 18, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(3px);
+}
+#settings-overlay[hidden] { display: none; }
+#settings-card {
+  width: min(420px, 92vw);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 22px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  color: var(--fg);
+  font-family: inherit;
+}
+#settings-card h2 {
+  margin: 0 0 16px;
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.settings-group { margin-bottom: 18px; }
+.settings-group-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.theme-options {
+  display: grid;
+  gap: 6px;
+}
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+.theme-option:hover { border-color: var(--accent-soft); }
+.theme-option input[type="radio"] {
+  accent-color: var(--accent);
+  margin: 0;
+}
+.theme-option .theme-name {
+  font-size: 0.92rem;
+  color: var(--fg);
+}
+.theme-option .theme-desc {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--fg-dim);
+}
+.theme-option.selected {
+  border-color: var(--accent);
+  background: var(--bg);
+}
+.theme-option.selected .theme-name { color: var(--accent); }
+.theme-swatch {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+}
+.theme-swatch span {
+  width: 10px;
+  height: 14px;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+#settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+#settings-close {
+  padding: 8px 16px;
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: var(--bg);
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+#settings-close:hover { filter: brightness(1.1); }

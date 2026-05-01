@@ -1,9 +1,15 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" data-theme="default">
 <head>
   <meta charset="utf-8" />
   <title>Aragria</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- 테마 CSS는 [data-theme="<name>"] 셀렉터로 감싸 모두 로드해 두고,
+       html[data-theme] 값에 따라 매칭되는 한 벌만 활성화된다. 새 테마는
+       themes/<name>.css 를 추가하고 여기서 link 한 줄, client.js THEMES 에
+       엔트리 한 줄만 추가하면 된다. -->
+  <link rel="stylesheet" href="/themes/default.css" />
+  <link rel="stylesheet" href="/themes/dracula.css" />
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -28,6 +34,7 @@
       </section>
       <footer id="status-footer">
         <span id="conn-status" class="off">연결 끊김</span>
+        <button id="settings-open" type="button" aria-label="설정 열기" title="설정">⚙ 설정</button>
       </footer>
     </aside>
     <div id="sidebar-resizer" role="separator" aria-orientation="vertical" title="드래그하여 사이드바 크기 조절"></div>
@@ -70,6 +77,18 @@
         <div id="welcome-error" class="welcome-error" hidden></div>
         <button type="submit">입장</button>
       </form>
+    </div>
+  </div>
+  <div id="settings-overlay" hidden>
+    <div id="settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <h2 id="settings-title">설정</h2>
+      <div class="settings-group">
+        <span class="settings-group-label">테마</span>
+        <div class="theme-options" id="theme-options"></div>
+      </div>
+      <div id="settings-actions">
+        <button type="button" id="settings-close">닫기</button>
+      </div>
     </div>
   </div>
   <script src="/env.js"></script>

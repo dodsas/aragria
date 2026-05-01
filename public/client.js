@@ -1257,12 +1257,140 @@ function setupPromptFocusFloat() {
   });
 }
 
+// ── Settings: theme picker ─────────────────────────────────
+// 테마 정의는 클라이언트의 단일 진실원. id 는 themes/<id>.css 파일 + html
+// data-theme 값과 일치. 새 테마 추가 시: (1) themes/<id>.css 작성 →
+// (2) index.html 에 <link> 추가 → (3) 아래 THEMES 배열에 한 줄 추가.
+// swatch 는 설정 모달에서 한눈에 팔레트를 비교하기 위한 작은 색 견본.
+const THEMES = [
+  {
+    id: 'default',
+    name: '기본',
+    desc: '양피지 다크',
+    swatch: ['#0e0f12', '#c9a14a', '#6db3c4', '#e07b8c'],
+  },
+  {
+    id: 'dracula',
+    name: 'Dracula',
+    desc: 'IntelliJ Dracula',
+    swatch: ['#282a36', '#bd93f9', '#8be9fd', '#ff79c6'],
+  },
+];
+const DEFAULT_THEME = 'default';
+const THEME_KEY = 'aragria.theme';
+
+function getSavedTheme() {
+  try {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved && THEMES.some((t) => t.id === saved)) return saved;
+  } catch {}
+  return DEFAULT_THEME;
+}
+function applyTheme(id) {
+  const valid = THEMES.some((t) => t.id === id) ? id : DEFAULT_THEME;
+  document.documentElement.dataset.theme = valid;
+  try { localStorage.setItem(THEME_KEY, valid); } catch {}
+  // 모달이 열려 있으면 선택 표시도 동기화
+  const list = document.getElementById('theme-options');
+  if (list) {
+    list.querySelectorAll('.theme-option').forEach((el) => {
+      const isMe = el.dataset.themeId === valid;
+      el.classList.toggle('selected', isMe);
+      const radio = el.querySelector('input[type="radio"]');
+      if (radio) radio.checked = isMe;
+    });
+  }
+}
+
+function renderThemeOptions(current) {
+  const list = document.getElementById('theme-options');
+  if (!list) return;
+  list.innerHTML = '';
+  for (const t of THEMES) {
+    const label = document.createElement('label');
+    label.className = 'theme-option' + (t.id === current ? ' selected' : '');
+    label.dataset.themeId = t.id;
+
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'theme';
+    radio.value = t.id;
+    radio.checked = t.id === current;
+    radio.addEventListener('change', () => {
+      if (radio.checked) applyTheme(t.id);
+    });
+    label.appendChild(radio);
+
+    const name = document.createElement('span');
+    name.className = 'theme-name';
+    name.textContent = t.name;
+    label.appendChild(name);
+
+    if (Array.isArray(t.swatch) && t.swatch.length) {
+      const swatch = document.createElement('span');
+      swatch.className = 'theme-swatch';
+      for (const c of t.swatch) {
+        const chip = document.createElement('span');
+        chip.style.background = c;
+        swatch.appendChild(chip);
+      }
+      label.appendChild(swatch);
+    }
+
+    const desc = document.createElement('span');
+    desc.className = 'theme-desc';
+    desc.textContent = t.desc || '';
+    label.appendChild(desc);
+
+    list.appendChild(label);
+  }
+}
+
+let settingsOpen = false;
+function openSettings() {
+  const overlay = document.getElementById('settings-overlay');
+  if (!overlay) return;
+  renderThemeOptions(document.documentElement.dataset.theme || DEFAULT_THEME);
+  overlay.hidden = false;
+  settingsOpen = true;
+}
+function closeSettings() {
+  const overlay = document.getElementById('settings-overlay');
+  if (!overlay) return;
+  overlay.hidden = true;
+  settingsOpen = false;
+}
+
+function setupSettings() {
+  applyTheme(getSavedTheme());
+  const openBtn = document.getElementById('settings-open');
+  const closeBtn = document.getElementById('settings-close');
+  const overlay = document.getElementById('settings-overlay');
+  openBtn?.addEventListener('click', openSettings);
+  closeBtn?.addEventListener('click', closeSettings);
+  // 배경(카드 바깥) 클릭 시 닫기
+  overlay?.addEventListener('click', (e) => {
+    if (e.target === overlay) closeSettings();
+  });
+}
+
+// 설정 모달이 열려 있을 때 ESC 는 모드 토글이 아닌 모달 닫기로 가로챈다.
+// capture 단계에서 받아 기존 keydown 핸들러보다 먼저 실행한다.
+document.addEventListener('keydown', (e) => {
+  if (settingsOpen && e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeSettings();
+  }
+}, true);
+
 buildMap();
 setupSidebarResizer();
 setupMobileSidebar();
 setupDpad();
 setupActionPad();
 setupPromptFocusFloat();
+setupSettings();
 recomputeMapViewport();
 new ResizeObserver(() => recomputeMapViewport()).observe(document.getElementById('sidebar'));
 setMode('typing');

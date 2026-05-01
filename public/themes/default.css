@@ -1,0 +1,24 @@
+/* Aragria 기본 테마 — 따뜻한 양피지 다크 (parchment dark).
+   색상 토큰만 정의. 구조/레이아웃은 style.css 에서 관리. */
+[data-theme="default"] {
+  --bg: #0e0f12;
+  --bg-panel: #15171c;
+  --bg-elev: #1c1f26;
+  --fg: #d8d4c8;
+  --fg-dim: #8a8578;
+  --accent: #c9a14a;
+  --accent-soft: #6e5a2a;
+  --danger: #b3543a;
+  --ok: #5e9b5b;
+  --border: #2a2d35;
+
+  /* Text-log highlight palette */
+  --c-room: #6db3c4;
+  --c-item: #b289d4;
+  --c-hp: #7cc77a;
+  --c-dmg: #e0a04a;
+  --c-dir: #d4c25e;
+  --c-player: #7da7d8;
+  --c-monster: #e07b8c;
+  --c-label: #9aa3ac;
+}
