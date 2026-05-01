@@ -912,15 +912,20 @@ export class Game {
         return this.changeClass(player, arg);
       case 'cast': case '시전': case '시전하다': case '마법': {
         // `시전 <spell>` 명시 명령은 한 번 더 prefix-match 한다 — 취향대로
-        // 「시전 파이어볼 고블린」 처럼 쓸 수 있게 하기 위함.
-        if (!arg) return this.send(player, { type: 'system', text: '시전할 마법 이름이 필요합니다.' });
+        // 「시전 파이어볼 고블린」 처럼 쓸 수 있게 하기 위함. 무인자 호출 또는
+        // 「마법 목록/리스트/list」 같은 자연어 변형은 보유 목록 출력으로 폴백 —
+        // 「뭐 쓸 수 있지?」 라는 의도를 받아 준다.
+        if (!arg || /^(목록|리스트|list)$/i.test(arg)) return this.listSpells(player);
         const m = this._matchSpellPrefix(arg);
         if (!m) return this.send(player, { type: 'system', text: '알 수 없는 마법입니다.' });
         return this.castSpell(player, m.spellId, m.rest);
       }
+      case 'skills': case 'spells': case 'spelllist':
+      case '스킬': case '마법목록': case '주문서':
+        return this.listSpells(player);
       case 'help':
       case '도움말': case '도움': case '명령어': case '명령':
-        return this.send(player, { type: 'text', text: '명령: 보기 [대상], 이동 <방향>, 공격 <대상/플레이어>, 말 <내용>, 사용 <아이템>, 장착 <장비>, 해제 <슬롯>, 전직 <직업>, <마법명> <대상>, 도움말' });
+        return this.send(player, { type: 'text', text: '명령: 보기 [대상], 이동 <방향>, 공격 <대상/플레이어>, 말 <내용>, 사용 <아이템>, 장착 <장비>, 해제 <슬롯>, 전직 <직업>, <마법명> <대상>, 스킬, 도움말' });
       default:
         if (['north','south','east','west','n','s','e','w','북','남','동','서','북쪽','남쪽','동쪽','서쪽'].includes(cmd)) {
           return this.move(player, cmd);
@@ -1445,6 +1450,43 @@ export class Game {
     this.pushStatus(player);
     // 비교전 룸메이트도 HP 바 변화를 보도록 룸 전체에 갱신 푸시.
     this._pushRoomMonsters(player.roomId);
+  }
+
+  // 보유 마법 목록을 로그에 출력. 마법사가 아니면 안내, 해금된 마법은
+  // element 색으로 강조해 시각적으로 모바일 액션 패드의 spell 버튼과
+  // 짝이 맞게. 잠금된 마법(레벨 미달)은 dim 라벨로 미리보기 — 다음 목표
+  // 레벨이 한눈에 보인다. 인벤토리/장비 같은 사이드바 패널이 아니라
+  // 텍스트 로그에 흘리는 이유: 이게 「쿼리」 명령이고 일회성 출력이라
+  // status 페이로드를 뚱뚱하게 만들 필요 없이 채팅 흐름에 자연스럽게 섞임.
+  listSpells(player) {
+    if (player.klass !== 'mage') {
+      return this.send(player, { type: 'system', text: '아직 마법을 익힌 직업이 아닙니다. (광장 + 레벨 10 에서 전직 가능)' });
+    }
+    const all = Object.values(SPELL_DEFS);
+    const unlocked = all.filter(s => player.level >= s.minLevel);
+    const locked = all.filter(s => player.level < s.minLevel);
+    if (unlocked.length === 0) {
+      this.send(player, { type: 'system', text: '아직 익힌 마법이 없습니다.' });
+    } else {
+      this.send(player, { type: 'text', text: `── 보유 마법 (${unlocked.length}/${all.length}) ──` });
+      for (const s of unlocked) {
+        this.seg(player, [
+          { text: '• ' },
+          { text: s.name, cls: `tx-dmg-${s.element}` },
+          { text: `  Lv.${s.minLevel}  ${s.mpCost}MP  데미지 ${s.dmg[0]}~${s.dmg[1]}` },
+        ]);
+      }
+    }
+    if (locked.length > 0) {
+      this.send(player, { type: 'text', text: '── 잠김 ──' });
+      for (const s of locked) {
+        this.seg(player, [
+          { text: '• ', cls: 'tx-label' },
+          { text: s.name, cls: 'tx-label' },
+          { text: `  Lv.${s.minLevel} 필요`, cls: 'tx-label' },
+        ]);
+      }
+    }
   }
 
   // 입력 전체를 SPELL_DEFS 의 이름·alias 와 prefix-match. 다단어 한국어
