@@ -1296,6 +1296,12 @@ const THEMES = [
     desc: 'IntelliJ Dracula',
     swatch: ['#282a36', '#bd93f9', '#8be9fd', '#ff79c6'],
   },
+  {
+    id: 'pctongsin',
+    name: 'PC통신',
+    desc: '천리안·나우누리',
+    swatch: ['#000000', '#000080', '#ffff55', '#55ffff'],
+  },
 ];
 const DEFAULT_THEME = 'default';
 const THEME_KEY = 'aragria.theme';

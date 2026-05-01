@@ -1,0 +1,29 @@
+/* PC통신 테마 — 천리안·나우누리·하이텔 톤.
+   1990년대 도스 시절 PC통신 단말 화면을 모티브로 한 16색 CGA/EGA 팔레트.
+   - 메인 배경: 순흑 (CRT 인광관)
+   - 사이드바·메뉴바: 도스 클래식 navy(#000080)
+   - 강조: bright yellow(#ffff55) — BBS 타이틀과 강조 셀 색
+   - 로그 하이라이트: bright cyan/magenta/green/yellow — VGA 16색 정통 매핑
+*/
+[data-theme="pctongsin"] {
+  --bg: #000000;
+  --bg-panel: #000080;
+  --bg-elev: #0000aa;
+  --fg: #d8d8d8;
+  --fg-dim: #aaaaaa;
+  --accent: #ffff55;
+  --accent-soft: #aaaa00;
+  --danger: #ff5555;
+  --ok: #55ff55;
+  --border: #5555ff;
+
+  /* Text-log highlight palette — CGA bright 톤으로 매핑 */
+  --c-room: #55ffff;
+  --c-item: #ff55ff;
+  --c-hp: #55ff55;
+  --c-dmg: #ffff55;
+  --c-dir: #ffaa00;
+  --c-player: #55ffff;
+  --c-monster: #ff5555;
+  --c-label: #aaaaaa;
+}
