@@ -582,93 +582,87 @@ export class Game {
   // allowTakeover=true (DEV): 같은 탭 새로고침에서 옛 소켓이 아직
   // readyState=1 일 때 새 소켓이 받기를 원하므로 newer-wins 유지.
   attachPlayer(socket, sid, { allowTakeover = false, auth = null } = {}) {
-    // 인증된 사용자: naverId 키가 sid 보다 우선. 같은 계정의 살아 있는 player
-    // 가 있으면 takeover 정책을 따르고, 없으면 캐릭터 스냅샷을 hydrate.
+    const existing = this.lookupExistingPlayer({ sid, auth });
+    if (existing) return this._reattachExistingPlayer(existing, socket, sid, allowTakeover);
     if (auth && auth.naverId) {
-      const existing = this.naverIdToPlayer.get(auth.naverId);
-      if (existing) {
-        if (existing.socket && existing.socket.readyState === 1) {
-          if (!allowTakeover) return null;
-          try { existing.socket.close(4001, 'replaced by newer session'); } catch {}
-        }
-        if (existing.graceTimer) {
-          clearTimeout(existing.graceTimer);
-          existing.graceTimer = null;
-        }
-        existing.disconnectedAt = null;
-        existing.socket = socket;
-        existing.sid = sid || existing.sid;
-        if (sid) this.sidToPlayer.set(sid, existing);
-        if (existing.registered) {
-          this.send(existing, { type: 'system', text: `다시 접속했습니다, ${existing.name}.` });
-          this.pushStatus(existing);
-          this.describeRoom(existing);
-          if (existing.spriteSvg) {
-            this.send(existing, { type: 'character_sprite', playerId: existing.id, svg: existing.spriteSvg });
-          }
-        } else if (existing.generating) {
-          if (REGISTRATION_ENABLED) {
-            this.send(existing, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
-          }
-        } else if (REGISTRATION_ENABLED) {
-          this.send(existing, { type: 'welcome' });
-        } else {
-          this._autoRegisterStub(existing);
-        }
-        return existing;
-      }
       // 신규 인증 attach. 저장된 캐릭터 스냅샷이 있으면 즉시 월드에 풀어 넣고,
       // 없으면 등록 모달로 흘려 신규 캐릭터를 만들게 한다.
       return this._addAuthenticatedPlayer(socket, sid, auth);
     }
-
-    if (sid) {
-      const existing = this.sidToPlayer.get(sid);
-      if (existing) {
-        if (existing.socket && existing.socket.readyState === 1) {
-          if (!allowTakeover) return null;
-          // DEV newer-wins: 옛 소켓을 강제 close. The old socket's `close`
-          // handler in index.js is guarded by `player.socket === socket` and
-          // silently skips its detach when that's no longer true — race-safe.
-          try { existing.socket.close(4001, 'replaced by newer session'); } catch {}
-        }
-        if (existing.graceTimer) {
-          clearTimeout(existing.graceTimer);
-          existing.graceTimer = null;
-        }
-        existing.disconnectedAt = null;
-        existing.socket = socket;
-        if (existing.registered) {
-          this.send(existing, { type: 'system', text: `다시 접속했습니다, ${existing.name}.` });
-          this.pushStatus(existing);
-          this.describeRoom(existing);
-          // Re-deliver own sprite so the freshly-loaded client can render it
-          // in combat without a roundtrip.
-          if (existing.spriteSvg) {
-            this.send(existing, { type: 'character_sprite', playerId: existing.id, svg: existing.spriteSvg });
-          }
-        } else if (existing.generating) {
-          // Stub mid-sprite-generation. Don't reset the modal back to the
-          // form — the in-flight generation is still running and a fresh
-          // `register` would hit the re-entry guard. Re-show the progress UI
-          // so the reloaded client knows we're still working. (Skipped when
-          // registration is disabled: there's no modal to re-show.)
-          if (REGISTRATION_ENABLED) {
-            this.send(existing, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
-          }
-        } else if (REGISTRATION_ENABLED) {
-          // Stub player resumed before completing registration — re-prompt.
-          this.send(existing, { type: 'welcome' });
-        } else {
-          // Disabled mode: a stub that came back without a registered state
-          // (auto-register lost mid-flight, or a sid registered before the
-          // flag was flipped). Re-arm auto-registration silently.
-          this._autoRegisterStub(existing);
-        }
-        return existing;
-      }
-    }
     return this._addPlayer(socket, sid);
+  }
+
+  // sid + auth 우선순위로 in-memory player 를 찾는다(없으면 null). 인증된
+  // 사용자는 sid 와 무관하게 같은 계정의 살아 있는 player 한 명만 존재 — 그래서
+  // auth 가 있으면 그쪽이 우선이다. handleDuplicatePending 에서도 같은 룰로
+  // 기존 탭을 찾아 「kicked_by_other」 를 보낸다.
+  lookupExistingPlayer({ sid, auth } = {}) {
+    if (auth && auth.naverId) return this.naverIdToPlayer.get(auth.naverId) || null;
+    if (sid) return this.sidToPlayer.get(sid) || null;
+    return null;
+  }
+
+  // 두 인덱스(sid, naverId) 에서 player 매핑을 동시에 제거. detach/finalize 양쪽
+  // 에서 같은 코드가 반복돼 분기 어긋남이 회귀로 들어오기 쉬워 한 곳으로 정리.
+  _unindexPlayer(p) {
+    if (!p) return;
+    if (p.sid) this.sidToPlayer.delete(p.sid);
+    if (p.naverId) this.naverIdToPlayer.delete(p.naverId);
+  }
+
+  // 같은 player 가 이미 in-memory 에 있을 때 — sid 또는 auth.naverId 매칭으로
+  // 도착 — 새 socket 으로 묶고 클라가 화면을 복원하기 위한 메시지를 다시 흘린다.
+  // 살아 있는 옛 socket 이 있으면 takeover 정책에 따라 reject(null) 또는 강제
+  // close(4001 'replaced by newer session'). graceTimer/disconnectedAt 을 정리해
+  // _finalizePlayer 가 발화되지 않도록.
+  //
+  // The old socket's `close` handler in index.js is guarded by
+  // `player.socket === socket` and silently skips its detach when that's no
+  // longer true — race-safe.
+  _reattachExistingPlayer(existing, socket, sid, allowTakeover) {
+    if (existing.socket && existing.socket.readyState === 1) {
+      if (!allowTakeover) return null;
+      try { existing.socket.close(4001, 'replaced by newer session'); } catch {}
+    }
+    if (existing.graceTimer) {
+      clearTimeout(existing.graceTimer);
+      existing.graceTimer = null;
+    }
+    existing.disconnectedAt = null;
+    existing.socket = socket;
+    if (sid) {
+      existing.sid = sid;
+      this.sidToPlayer.set(sid, existing);
+    }
+
+    if (existing.registered) {
+      this.send(existing, { type: 'system', text: `다시 접속했습니다, ${existing.name}.` });
+      this.pushStatus(existing);
+      this.describeRoom(existing);
+      // Re-deliver own sprite so the freshly-loaded client can render it
+      // in combat without a roundtrip.
+      if (existing.spriteSvg) {
+        this.send(existing, { type: 'character_sprite', playerId: existing.id, svg: existing.spriteSvg });
+      }
+    } else if (existing.generating) {
+      // Stub mid-sprite-generation. Don't reset the modal back to the form —
+      // the in-flight generation is still running and a fresh `register`
+      // would hit the re-entry guard. Re-show the progress UI so the
+      // reloaded client knows we're still working. (Skipped when
+      // registration is disabled: there's no modal to re-show.)
+      if (REGISTRATION_ENABLED) {
+        this.send(existing, { type: 'register_progress', text: '캐릭터를 그리는 중입니다…' });
+      }
+    } else if (REGISTRATION_ENABLED) {
+      // Stub player resumed before completing registration — re-prompt.
+      this.send(existing, { type: 'welcome' });
+    } else {
+      // Disabled mode: a stub that came back without a registered state
+      // (auto-register lost mid-flight, or a sid registered before the
+      // flag was flipped). Re-arm auto-registration silently.
+      this._autoRegisterStub(existing);
+    }
+    return existing;
   }
 
   // 인증된 신규 attach. 저장된 캐릭터 스냅샷이 있으면 player 객체를 그 데이터로
@@ -751,8 +745,7 @@ export class Game {
     // sid'd connect doesn't keep the half-formed record around.
     if (!p.registered) {
       this.players.delete(id);
-      if (p.sid) this.sidToPlayer.delete(p.sid);
-      if (p.naverId) this.naverIdToPlayer.delete(p.naverId);
+      this._unindexPlayer(p);
       return;
     }
 
@@ -962,8 +955,7 @@ export class Game {
     this._persistPlayer(p);
     const fromRoom = p.roomId;
     this.players.delete(id);
-    if (p.sid) this.sidToPlayer.delete(p.sid);
-    if (p.naverId) this.naverIdToPlayer.delete(p.naverId);
+    this._unindexPlayer(p);
     this._clearKillStealBlocksAgainst(id, fromRoom);
     this.broadcastRoom(fromRoom, { type: 'text', text: `${p.name}님이 떠났습니다.` });
     this._pushRoomMonsters(fromRoom);

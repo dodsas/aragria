@@ -47,18 +47,23 @@ app.get('/env.js', (_req, res) => {
 
 // 네이버 OAuth 라우트. express 의 자체 라우팅을 그대로 쓰고, 핸들러는
 // vanilla (req, res) — 쿠키/리다이렉트만 다루면 충분해 미들웨어가 필요 없다.
+// async 핸들러는 wrapAsyncRoute 로 감싸서 핸들러 내부에서 throw 가 된 경우
+// 라우트가 hang 되지 않고 500 으로 수렴하도록 한다.
+function wrapAsyncRoute(name, handler) {
+  return (req, res) => {
+    Promise.resolve(handler(req, res)).catch((err) => {
+      console.error(`[auth] ${name} handler crash:`, err);
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.end('internal error');
+      }
+    });
+  };
+}
 app.get('/auth/naver/login', handleLoginRedirect);
-app.get('/auth/naver/callback', (req, res) => { handleCallback(req, res).catch((err) => {
-  console.error('[auth] callback handler crash:', err);
-  if (!res.headersSent) {
-    res.statusCode = 500;
-    res.end('internal error');
-  }
-}); });
+app.get('/auth/naver/callback', wrapAsyncRoute('callback', handleCallback));
 app.get('/auth/me', handleMe);
-app.post('/auth/logout', (req, res) => { handleLogout(req, res).catch(() => {
-  if (!res.headersSent) { res.statusCode = 500; res.end('internal error'); }
-}); });
+app.post('/auth/logout', wrapAsyncRoute('logout', handleLogout));
 
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
@@ -181,9 +186,7 @@ function handleDuplicatePending(socket, sid, auth) {
 
       // 기존 탭에 먼저 통보 — close(4001) 이 1006 으로 mangling 되어도 모달이
       // 떠서 재연결 정책이 정해지도록. send 는 close 보다 먼저 큐에 들어간다.
-      const existing = auth
-        ? game.naverIdToPlayer.get(auth.naverId)
-        : game.sidToPlayer.get(sid);
+      const existing = game.lookupExistingPlayer({ sid, auth });
       if (existing && existing.socket && existing.socket.readyState === 1) {
         try { existing.socket.send(JSON.stringify({ type: 'kicked_by_other' })); } catch {}
       }

@@ -1,5 +1,10 @@
 # auth.md — 네이버 로그인 + 캐릭터 영속성
 
+> 영속 백엔드는 **Turso(libsql) embedded replica**. 로컬 SQLite 가
+> primary 와 sync 되어 hot path 는 로컬, 쓰기는 디바운스 batch.
+> 자세한 내용은 「데이터 영속」 절.
+
+
 ## 목적
 
 - 사용자가 네이버 계정으로 로그인하면 캐릭터(이름·레벨·EXP·인벤토리·장비·
@@ -14,8 +19,9 @@
 
 - `server/auth.js` — Naver OAuth 2.0 어댑터. `/auth/naver/login`,
   `/auth/naver/callback`, `/auth/me`, `/auth/logout` 4 라우트.
-- `server/store.js` — 단일 JSON 파일(`data/users.json`)에 모든 계정과 그
-  계정에 묶인 캐릭터 스냅샷을 저장. 디바운스(1.5s) + atomic rename 으로 flush.
+- `server/store.js` — Turso(libsql) embedded replica 위에 단일 `users` 테이블.
+  로컬 SQLite(`data/local.db`) 가 primary 와 sync 돼 hot path 는 로컬 디스크
+  액세스(< 1ms), 쓰기는 디바운스(1.5s) 묶음 batch UPSERT 로 primary 로 forward.
 - `server/game.js` — `attachPlayer({auth})` 가 인증된 사용자에 대해
   `naverIdToPlayer` 맵에 키잉, 저장된 스냅샷이 있으면 hydrate, 없으면 등록 모달.
   레벨업·장착·이동·연결종료 시점에 `_persistPlayer()` 로 스냅샷을 갱신.
@@ -83,13 +89,35 @@
   `host`/`x-forwarded-proto` 헤더로 자동 합성(개발용). 운영은 풀 URL 명시 권장.
 - `SESSION_COOKIE_SECURE` — `'true'` 면 `Secure` 플래그 강제. https 종단
   뒤(Render 등)에서 활성.
+- `TURSO_DATABASE_URL` — Turso DB 의 libsql 엔드포인트
+  (예: `libsql://agria-<owner>.turso.io`). 미설정이면 store 가 standalone
+  로컬 SQLite 로 떨어져 운영에선 영속성이 사라지므로 반드시 설정.
+- `TURSO_AUTH_TOKEN` — `turso db tokens create <db>` 로 발급한 토큰.
 
-## 데이터 파일
+## 데이터 영속
 
-- 위치: `data/users.json` (gitignored).
-- 1k 동시 접속 목표 안에서 메모리에 통째로 들고 있어도 안전한 크기.
-- 사용자 수가 늘어 단일 파일이 부담스러워지면 user → file shard 로 전환.
-- Render 운영 환경은 `render.yaml` 의 `disk:` 마운트(영속 디스크)로 보존.
+- **백엔드**: Turso/libsql embedded replica.
+  - 로컬 파일(`data/local.db`, gitignored) — 모든 읽기는 여기서 끝남(< 1ms).
+  - 원격 primary — 모든 쓰기가 forward 되어 영속화. 다른 인스턴스/리전이
+    읽을 때도 같은 primary 에서 sync.
+- **테이블**: `users(naver_id PK, provider, nickname, session_token,
+  session_rotated_at, character_json, created_at, updated_at)` 한 개.
+  `character_json` 은 캐릭터 스냅샷을 JSON 으로 보관 — 게임 형상이 자주
+  바뀌므로 컬럼으로 펼치지 않고 JSON 으로.
+- **부팅**: `initStore()` 가 createClient → `client.sync()` 로 primary 의
+  최신 상태를 로컬 replica 로 끌어옴. Render 처럼 fs 가 ephemeral 이라 매
+  부팅마다 `local.db` 가 새로 만들어져도 1회 sync 로 모든 데이터 즉시 복구.
+- **마이그레이션**: 옛 JSON 기반 영속(`data/users.json`)이 디스크에 남아
+  있고 SQLite 가 비어 있으면 부팅 시 1 회 자동으로 import. 한 번 import
+  하면 SQLite 가 진실원이 되며 JSON 은 더 이상 읽지 않는다.
+- **쓰기 디바운스**: `_persistPlayer` / `loginNaverUser` / `clearSessionToken`
+  / `saveCharacterFor` 호출은 in-memory state 만 즉시 갱신하고 dirty 사용자
+  id 를 `Set` 에 모은다. 1.5s 후 timer 발화 시 모든 dirty 사용자에 대해 한
+  번의 `client.batch([UPSERT...])` 로 묶어 보낸다 — 같은 사용자에 대한 N 번
+  의 호출은 1 번의 round-trip 으로 압축.
+- **Naver 콜백 / 로그아웃 / SIGTERM** 직후엔 `flushNow()` 로 즉시 동기 flush
+  해서 「토큰 회전이 디스크에 닿기 전에 다른 디바이스가 옛 토큰을 사용하는」
+  race 를 막는다.
 
 ## 새 OAuth 제공자 추가
 

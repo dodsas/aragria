@@ -46,24 +46,43 @@ The client has two input modes, toggled with **ESC**:
 
 The server is unaware of modes — WASD is a thin client wrapper that emits the same `cmd` messages as text input. See `movement.md` for the full contract, rate-limit considerations at 1k concurrent, and rationale.
 
-### Layout files
+### 소스 & 문서 인덱스
+
+**소스 레이아웃**
 
 - `server/index.js` — HTTP + WebSocket bootstrap, connection lifecycle.
 - `server/game.js` — world, players, rooms, objects, command dispatch. The single source of truth for game logic.
 - `server/config.js` — tunable knobs (monster respawn timings, etc.). Edit values here, not in `game.js`.
 - `server/zones/` — map content split per zone (`town.js`, `forest.js`, ...) plus `index.js` loader. Add new zones here, not in `game.js`. See `zone.md`.
 - `public/index.html`, `public/style.css`, `public/client.js` — the entire client. No build step.
-- `ui_main.md` — sidebar layout contract (position, structure, status protocol).
-- `movement.md` — movement input modes (text vs WASD) and key mapping.
-- `monster.md` — monster definition schema, tier system, and respawn rules.
-- `command.md` — server-authoritative input rate limits (attack cooldown, etc.).
-- `zone.md` — zone module schema (rooms/objects/spawns), loader contract, how to add new zones.
-- `llm.md` — LLM dispatcher / provider matrix, env vars, how to add a new per-situation generator.
-- `touch_controls.md` — 모바일 하단 d-pad + 계층형 액션 패드(공격/봐/마법 → 타깃 선택), `room_monsters` 페이로드 확장.
+
+**문서 카테고리.** 11 개 md 파일은 모두 프로젝트 루트에 평평하게 둔다(코드 주석에서 `magic.md` 같이 bare 파일명으로 참조하기 쉽게). 카테고리는 「어디서 같이 보면 되는지」 의 인덱스로만 의미가 있다 — 새 문서를 추가할 때 아래에 한 줄 끼워 넣고 짧은 한 줄 요약만 붙인다.
+
+*게임 시스템 — 진행·전투의 단일 진실원*
+
 - `class.md` — 직업 시스템(novice/mage), 전직 규칙(광장 + 레벨 10), 레벨/EXP 테이블, 새 직업 추가 절차.
 - `magic.md` — 마법 정의·시전 게이트·element 색 매트릭스·다단어 한국어 spell 입력 파서(`_matchSpellPrefix`), 새 마법 추가 절차.
 - `equipment.md` — 아이템 단일 진실원 ITEM_DEFS·드랍 매트릭스·attack/defense 데미지 공식·equip/unequip 명령·새 아이템 추가 절차.
-- `auth.md` — 네이버 OAuth 로그인·세션 토큰 회전(다른 디바이스 로그인 시 단일성 보장)·캐릭터 영속성(`data/users.json`)·env(NAVER_CLIENT_ID/SECRET, NAVER_CALLBACK_URL, SESSION_COOKIE_SECURE).
+- `monster.md` — monster definition schema, tier system, and respawn rules.
+
+*입력·프로토콜 — 클라→서버 입력 정책*
+
+- `command.md` — server-authoritative input rate limits (attack cooldown, etc.).
+- `movement.md` — movement input modes (text vs WASD) and key mapping.
+
+*클라이언트 — 화면 구성과 모바일 컨트롤*
+
+- `ui_main.md` — sidebar layout contract (position, structure, status protocol).
+- `touch_controls.md` — 모바일 하단 d-pad + 계층형 액션 패드(공격/봐/마법 → 타깃 선택), `room_monsters` 페이로드 확장.
+
+*월드 콘텐츠 — 맵·존*
+
+- `zone.md` — zone module schema (rooms/objects/spawns), loader contract, how to add new zones.
+
+*인프라 — 게임 외 서버 부품*
+
+- `auth.md` — 네이버 OAuth 로그인·세션 토큰 회전(다른 디바이스 로그인 시 단일성 보장)·Turso(libsql) embedded replica 영속성(`data/local.db` + 원격 primary)·env(NAVER_CLIENT_ID/SECRET, NAVER_CALLBACK_URL, SESSION_COOKIE_SECURE, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN).
+- `llm.md` — LLM dispatcher / provider matrix, env vars, how to add a new per-situation generator.
 
 ### Commands
 

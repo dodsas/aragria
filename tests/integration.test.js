@@ -10,6 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import { createClient } from '@libsql/client';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, '..');
@@ -133,14 +134,17 @@ test('WS attach: 익명 sid 만으로 들어오면 welcome 모달이 도착', as
 });
 
 test('WS attach: 인증된 사용자는 저장된 캐릭터로 hydrate (welcome 없이 status)', async () => {
-  // 순서가 중요: 서버를 먼저 죽여야 한다. 살아 있는 동안 파일을 덮어써도 SIGTERM
-  // 핸들러의 flushNow 가 in-memory(이미 logout 으로 token=null) 상태를 디스크에
-  // 다시 써 우리 시드를 지운다.
+  // 서버를 먼저 죽여 in-memory 상태가 SQLite 를 덮어쓰는 race 를 막은 뒤,
+  // local.db 의 session_token 을 직접 회전. SQLite 가 이미 마이그레이션된
+  // 상태라 users.json 을 다시 써도 반영되지 않으므로 libsql 로 곧장 UPDATE.
   await stopServer();
   const fresh = 'c'.repeat(64);
-  const raw = JSON.parse(await fs.readFile(path.join(dataDir, 'users.json'), 'utf8'));
-  raw.byNaverId.naver_seed.sessionToken = fresh;
-  await fs.writeFile(path.join(dataDir, 'users.json'), JSON.stringify(raw), 'utf8');
+  const c = createClient({ url: 'file:' + path.join(dataDir, 'local.db') });
+  try {
+    await c.execute('UPDATE users SET session_token = ? WHERE naver_id = ?', [fresh, 'naver_seed']);
+  } finally {
+    await c.close();
+  }
   await startServer();
 
   const ws = new WebSocket(`ws://localhost:${port}/ws?sid=${'w'.repeat(32)}`, {

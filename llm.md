@@ -8,19 +8,35 @@ sprites / item views / scene descriptions in the future).
 
 ```
 server/llm/
-├── index.js                         # callLLM(prompt, opts) dispatcher
-├── providers/
-│   ├── claude_cli.js                # local Claude Code CLI
-│   ├── groq.js                      # Groq /chat/completions
-│   ├── gemini.js                    # Google AI Studio
-│   ├── cloudflare.js                # Workers AI
-│   └── openrouter.js                # OpenRouter free models
+├── index.js                          # callLLM(prompt, opts) dispatcher
+├── providers/                        # one provider = one file (no shared logic)
+│   ├── claude_cli.js                 # local Claude Code CLI
+│   ├── groq.js                       # Groq /chat/completions
+│   ├── gemini.js                     # Google AI Studio
+│   ├── cloudflare.js                 # Workers AI
+│   └── openrouter.js                 # OpenRouter free models
 └── generators/
-    └── character_sprite.js          # one use case = one file
+    └── character_sprite/             # complex generator → directory
+        ├── index.js                  # public generate() facade
+        ├── classify.js               # LLM "card" classifier (build/palette/hair_color/gender/...)
+        ├── compose.js                # in-house SVG composer — picks parts from card
+        ├── parts.js                  # body / hair / weapon / accent SVG fragments
+        ├── palettes.js               # named palette + HAIR_COLORS matrix
+        └── cache.js                  # in-memory (name|description) → SVG cache
 ```
 
 `server/sprite.js` is a thin facade so `game.js` keeps its existing
 `import { generateCharacterSprite } from './sprite.js'`.
+
+**Why a directory for `character_sprite`.** The generator runs a two-stage
+pipeline: an LLM call that produces a structured *card* (build/palette/hair/
+gender/accent slots — see `classify.js`), then an in-house composer that
+maps the card to SVG fragments (`compose.js` + `parts.js` + `palettes.js`)
+without touching the LLM. Splitting these per file keeps the LLM prompt,
+the SVG primitives, and the palette matrix independently editable, and lets
+the cache key on the deterministic `(name|description)` input rather than
+the LLM output. New simple generators that only need `prompt → text → parse`
+can still ship as a single `<name>.js` file under `generators/`.
 
 ## Provider selection
 
@@ -90,7 +106,11 @@ const text = await callLLM(prompt, {
 
 ## Adding a new generator
 
-Each generator is one file under `server/llm/generators/` that owns:
+Pick one of two shapes based on complexity.
+
+### Shape A — single file (`generators/<name>.js`)
+
+For prompt → text → parse generators that have no further structure. Owns:
 
 - a `buildPrompt(input)` function
 - an `extract...` function that pulls the structured output back out of the
@@ -98,27 +118,50 @@ Each generator is one file under `server/llm/generators/` that owns:
 - an `export async function generate(input, opts)` that returns the
   extracted value or `null`
 
-Example skeleton for a monster-sprite generator:
+Example skeleton for a hypothetical scene-description generator:
 
 ```js
-// server/llm/generators/monster_sprite.js
+// server/llm/generators/scene_description.js
 import { callLLM } from '../index.js';
 
-function buildPrompt({ defId, lore }) { /* ... */ }
-function extractSvg(text) { /* ... */ }
+function buildPrompt({ roomId, mood }) { /* ... */ }
+function extractText(text) { /* ... */ }
 
-export async function generate({ defId, lore }, opts = {}) {
-  const raw = await callLLM(buildPrompt({ defId, lore }), {
-    timeoutMs: 60_000,
+export async function generate({ roomId, mood }, opts = {}) {
+  const raw = await callLLM(buildPrompt({ roomId, mood }), {
+    timeoutMs: 30_000,
     ...opts,
   });
-  return extractSvg(raw);
+  return extractText(raw);
 }
 ```
 
-Callers `import { generate } from './llm/generators/monster_sprite.js'`.
-The dispatcher and providers don't need any changes — they're agnostic to
-what the prompt is for.
+Callers `import { generate } from './llm/generators/scene_description.js'`.
+
+### Shape B — directory (`generators/<name>/`)
+
+For multi-stage generators (LLM classify → in-house compose, etc.) like
+`character_sprite/`. The directory must export `generate` from
+`<name>/index.js`; everything else is internal. Use this when:
+
+- the prompt produces a *structured intermediate* you want to inspect / cache
+  separately from the final artifact, **or**
+- the post-processing has its own substantial logic (palettes, parts,
+  composition rules) that would crowd a single file.
+
+Layout convention — keep the same names as `character_sprite/` to make new
+directory generators feel familiar:
+
+```
+generators/<name>/
+├── index.js                # generate() facade
+├── classify.js             # LLM call → structured card
+├── compose.js              # card → final artifact
+└── (parts.js / palettes.js / cache.js as needed)
+```
+
+The dispatcher and providers don't need any changes either way — they're
+agnostic to what the prompt is for.
 
 ## Picking a provider
 

@@ -7,12 +7,9 @@ services:
     branch: develop
     buildCommand: npm ci
     startCommand: npm start
-    # 영속 디스크 — 사용자 계정·캐릭터 스냅샷 저장 위치(data/users.json).
-    # 빈 디스크가 처음 마운트되면 store.js 가 자동으로 빈 상태로 시작한다.
-    disk:
-      name: agria-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
+    # 영속성은 Turso(libsql embedded replica) 가 책임진다 — Render free 의
+    # ephemeral fs 에 local.db 를 두지만 부팅 시 primary 로부터 sync 되어
+    # 데이터가 자동 복구되므로 별도 persistent disk 가 필요 없다.
     envVars:
       - key: NODE_VERSION
       # 네이버 OAuth — 키 발급 후 Render 대시보드에서 값 입력. 비워 두면
@@ -28,3 +25,10 @@ services:
       # 프록시 뒤 https 환경에서 세션 쿠키에 Secure 플래그 강제.
       - key: SESSION_COOKIE_SECURE
         value: 'true'
+      # Turso 데이터베이스 — `turso db create agria` 로 만들고
+      # `turso db tokens create agria` 로 토큰 발급. 미설정이면 standalone
+      # 로컬 SQLite 모드로 떨어져 ephemeral 한 dev 실행만 가능.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false

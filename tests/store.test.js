@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createClient } from '@libsql/client';
 import {
   initStore,
   flushNow,
@@ -23,11 +24,14 @@ let tmpDir;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agria-store-'));
-  _resetForTesting(tmpDir);
+  await _resetForTesting(tmpDir);
   await initStore();
 });
 
 afterEach(async () => {
+  // 다음 테스트가 새 tmpDir 로 init 하기 전에 현재 libsql 클라이언트를 닫아
+  // 파일 핸들 / 백그라운드 sync timer 잔존을 막는다.
+  await _resetForTesting();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -99,8 +103,8 @@ test('flushNow + initStore: 디스크 round-trip 으로 사용자/캐릭터 보�
   saveCharacterFor('n1', { name: '디스크', level: 5, klass: 'mage' });
   await flushNow();
 
-  // 같은 디렉터리로 모듈 상태만 리셋 — 디스크에서 다시 읽혀야 함.
-  _resetForTesting(tmpDir);
+  // 같은 디렉터리로 모듈 상태만 리셋 — 로컬 SQLite 에서 다시 읽혀야 함.
+  await _resetForTesting(tmpDir);
   await initStore();
 
   const u = getUserByNaverId('n1');
@@ -112,30 +116,61 @@ test('flushNow + initStore: 디스크 round-trip 으로 사용자/캐릭터 보�
   assert.equal(ch.klass, 'mage');
 });
 
-test('flushNow: atomic rename — 부분 쓰기로 깨진 JSON 이 남지 않음', async () => {
+test('flushNow: 데이터가 로컬 SQLite (local.db) 에 영속됨', async () => {
   loginNaverUser({ providerUserId: 'n1', nickname: 'A' });
+  saveCharacterFor('n1', { name: 'A', level: 7 });
   await flushNow();
-  // .tmp 가 남아 있지 않아야 함(rename 으로 정리).
-  const entries = await fs.readdir(tmpDir);
-  const tmpLeftover = entries.find(f => f.endsWith('.tmp'));
-  assert.equal(tmpLeftover, undefined);
-  // 메인 파일은 valid JSON 으로 파싱 가능.
-  const raw = await fs.readFile(path.join(tmpDir, 'users.json'), 'utf8');
-  const parsed = JSON.parse(raw);
-  assert.ok(parsed.byNaverId.n1);
+
+  // 별도 libsql 클라이언트로 같은 파일을 열어 row 직접 확인 — 우리 모듈
+  // 캐시를 우회하므로 진짜 디스크에 도달했는지 검증한다.
+  const dbPath = path.join(tmpDir, 'local.db');
+  const stat = await fs.stat(dbPath);
+  assert.ok(stat.size > 0, 'local.db 가 비어있지 않다');
+  const c2 = createClient({ url: 'file:' + dbPath });
+  try {
+    const rs = await c2.execute('SELECT naver_id, nickname, character_json FROM users WHERE naver_id = ?', ['n1']);
+    assert.equal(rs.rows.length, 1);
+    assert.equal(rs.rows[0].nickname, 'A');
+    const ch = JSON.parse(rs.rows[0].character_json);
+    assert.equal(ch.level, 7);
+  } finally {
+    await c2.close();
+  }
 });
 
-test('initStore: 손상된 JSON 은 빈 상태로 폴백(서버 부팅 차단 안 함)', async () => {
-  await fs.writeFile(path.join(tmpDir, 'users.json'), 'not a valid json{', 'utf8');
-  _resetForTesting(tmpDir);
-  // 손상된 파일은 의도된 케이스라 stderr 로그가 노이즈로 흘러나오지 않도록 stub.
-  const origErr = console.error;
-  console.error = () => {};
-  try { await initStore(); } finally { console.error = origErr; }
-  assert.equal(getUserByNaverId('anything'), null);
-  // 새 로그인은 정상 동작.
-  const u = loginNaverUser({ providerUserId: 'n1', nickname: 'A' });
-  assert.ok(u.sessionToken);
+test('initStore: 옛 users.json 이 있으면 SQLite 로 1회 마이그레이션', async () => {
+  // 직전 init 이 만든 SQLite 와 클라이언트를 정리한 뒤 「JSON 만 있는」 상태
+  // 로 만들어 init 을 다시 돈다.
+  await _resetForTesting();
+  await fs.rm(tmpDir, { recursive: true, force: true });
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agria-store-'));
+  await fs.writeFile(path.join(tmpDir, 'users.json'), JSON.stringify({
+    byNaverId: {
+      legacy_user: {
+        provider: 'naver',
+        providerUserId: 'legacy_user',
+        nickname: '레거시',
+        sessionToken: 'legacy_token_xyz',
+        sessionRotatedAt: 1000,
+        character: { name: '레거시영웅', level: 3 },
+        createdAt: 500,
+        updatedAt: 500,
+      },
+    },
+  }), 'utf8');
+
+  await _resetForTesting(tmpDir);
+  // 마이그레이션 성공 로그가 노이즈로 보이지 않도록 stub.
+  const origLog = console.log;
+  console.log = () => {};
+  try { await initStore(); } finally { console.log = origLog; }
+
+  const u = getUserByNaverId('legacy_user');
+  assert.ok(u, '마이그레이션된 사용자 존재');
+  assert.equal(u.nickname, '레거시');
+  assert.equal(u.character.level, 3);
+  // 토큰도 보존돼 같은 세션이 유지된다.
+  assert.equal(getUserBySessionToken('legacy_token_xyz'), u);
 });
 
 test('재로그인은 character 를 보존', () => {
