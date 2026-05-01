@@ -24,6 +24,23 @@ const settingsAccountGroup = document.getElementById('settings-account-group');
 const settingsAccountName = document.getElementById('settings-account-name');
 const settingsLogoutBtn = document.getElementById('settings-logout');
 
+// 사이드바 stat 블록 DOM refs — renderStatus 가 매 status push 마다 호출되며
+// (전투 / 이동 / MP 회복 / 상태 변동 등) 1k 동접 × 빈번한 호출에서 12 회의
+// getElementById 가 누적된다. 페이지 라이프타임 동안 형상이 안 바뀌므로 모듈
+// 로드 시 한 번 캐싱.
+const statClassEl = document.getElementById('stat-class');
+const statLevelEl = document.getElementById('stat-level');
+const statHpRow = document.getElementById('stat-hp-row');
+const statMpRow = document.getElementById('stat-mp-row');
+const statExpRow = document.getElementById('stat-exp-row');
+const statClassHint = document.getElementById('stat-class-hint');
+const statHpFill = document.getElementById('stat-hp-fill');
+const statHpNum = document.getElementById('stat-hp-num');
+const statMpFill = document.getElementById('stat-mp-fill');
+const statMpNum = document.getElementById('stat-mp-num');
+const statExpFill = document.getElementById('stat-exp-fill');
+const statExpNum = document.getElementById('stat-exp-num');
+
 // /auth/me 결과 캐시. null = 비인증, {nickname} = 인증. 첫 페이지 로드와 logout
 // 직후에 갱신된다. 다른 디바이스 로그인으로 세션이 회전돼 WS 가 끊기면 재연결
 // 직전에 다시 fetch 해 UI 상태를 일치시킨다.
@@ -239,6 +256,7 @@ function handleMessage(msg) {
     case 'text':    appendLine(msg.segments ?? msg.text, 'line'); break;
     case 'system':  appendLine(msg.text, 'line system'); break;
     case 'status':  renderStatus(msg.status); hideWelcome(); break;
+    case 'status_delta': applyStatusDelta(msg.partial); break;
     case 'view':    renderObjectView(msg.view); break;
     case 'combat':  renderCombat(msg.combat); break;
     case 'room_monsters': renderRoomMonsters(msg); break;
@@ -1032,6 +1050,10 @@ function appendLine(content, cls = 'line') {
 // 노출되지 않는다 — 패드가 자연스럽게 짧아지고 오탭 후 「MP 부족」 도 사라진다.
 let currentSpells = [];
 let currentMp = 0;
+// 마지막 풀 status 의 스냅샷. status_delta 가 hp/mp/exp 같은 단일 필드만
+// 보내올 때 setBar 의 max 값(maxHp/maxMp/expNext)이 필요하다 — 매번 풀 status 를
+// 다시 받지 않고도 부분 갱신을 그릴 수 있도록 직전 값을 캐싱.
+let lastStatus = null;
 
 function setBar(fillEl, numEl, cur, max) {
   if (!fillEl || !numEl) return;
@@ -1043,46 +1065,34 @@ function setBar(fillEl, numEl, cur, max) {
 
 function renderStatus(status) {
   if (!status) return;
+  lastStatus = status;
   statusName.textContent = status.name;
 
   // 캐릭터 스탯 블록. 서버가 hp/mp/level/exp/klassName 을 권위로 보낸다.
   // mp 가 0 이하인 직업(novice)은 마나 행 자체를 숨겨 시각적 노이즈를 줄임.
-  const classEl = document.getElementById('stat-class');
-  const levelEl = document.getElementById('stat-level');
-  const hpRow = document.getElementById('stat-hp-row');
-  const mpRow = document.getElementById('stat-mp-row');
-  const expRow = document.getElementById('stat-exp-row');
-  const classHint = document.getElementById('stat-class-hint');
-  if (classEl) classEl.textContent = status.klassName || '-';
-  if (levelEl) levelEl.textContent = `Lv. ${status.level || 1}`;
-  if (hpRow) {
-    setBar(document.getElementById('stat-hp-fill'), document.getElementById('stat-hp-num'),
-           status.hp ?? 0, status.maxHp ?? 0);
-  }
-  if (mpRow) {
+  if (statClassEl) statClassEl.textContent = status.klassName || '-';
+  if (statLevelEl) statLevelEl.textContent = `Lv. ${status.level || 1}`;
+  if (statHpRow) setBar(statHpFill, statHpNum, status.hp ?? 0, status.maxHp ?? 0);
+  if (statMpRow) {
     if ((status.maxMp || 0) > 0) {
-      mpRow.hidden = false;
-      setBar(document.getElementById('stat-mp-fill'), document.getElementById('stat-mp-num'),
-             status.mp ?? 0, status.maxMp ?? 0);
+      statMpRow.hidden = false;
+      setBar(statMpFill, statMpNum, status.mp ?? 0, status.maxMp ?? 0);
     } else {
-      mpRow.hidden = true;
+      statMpRow.hidden = true;
     }
   }
-  if (expRow) {
+  if (statExpRow) {
     if ((status.expNext || 0) > 0) {
-      expRow.hidden = false;
-      setBar(document.getElementById('stat-exp-fill'), document.getElementById('stat-exp-num'),
-             status.exp ?? 0, status.expNext ?? 0);
+      statExpRow.hidden = false;
+      setBar(statExpFill, statExpNum, status.exp ?? 0, status.expNext ?? 0);
     } else {
       // 만렙 — exp 행을 'MAX' 로 고정 표시.
-      expRow.hidden = false;
-      const fill = document.getElementById('stat-exp-fill');
-      const num = document.getElementById('stat-exp-num');
-      if (fill) fill.style.width = '100%';
-      if (num) num.textContent = 'MAX';
+      statExpRow.hidden = false;
+      if (statExpFill) statExpFill.style.width = '100%';
+      if (statExpNum) statExpNum.textContent = 'MAX';
     }
   }
-  if (classHint) classHint.hidden = !status.canChangeClass;
+  if (statClassHint) statClassHint.hidden = !status.canChangeClass;
 
   // 모바일 마법 메뉴를 채울 spell 목록 캐싱. 서버 status 가 클라 권위 원본.
   currentSpells = Array.isArray(status.spells) ? status.spells : [];
@@ -1135,6 +1145,33 @@ function renderStatus(status) {
       if (it.kind) li.dataset.kind = it.kind;
       li.title = it.kind === 'equip' ? '클릭해서 장착' : '클릭해서 사용';
       inventoryEl.appendChild(li);
+    }
+  }
+}
+
+// 부분 status 갱신 — 서버가 status_delta 메시지로 mp/hp/exp 같은 변동 잦은
+// 단일 필드만 보낼 때의 진입점. 인벤토리/장비 DOM 재구성을 skip 해 잦은 push
+// (MP 회복 3 초 주기 등) 가 클라 CPU 를 갉아먹지 않게 한다. lastStatus 캐시에
+// 병합한 뒤 영향받는 사이드바 행만 다시 그리고, mp 가 변하면 액션 패드의
+// MP 필터를 재평가해 새로 시전 가능해진 마법이 즉시 노출되도록.
+function applyStatusDelta(partial) {
+  if (!partial || !lastStatus) return;
+  Object.assign(lastStatus, partial);
+  if (partial.hp != null && statHpRow) {
+    setBar(statHpFill, statHpNum, lastStatus.hp ?? 0, lastStatus.maxHp ?? 0);
+  }
+  if (partial.mp != null && statMpRow && (lastStatus.maxMp || 0) > 0) {
+    statMpRow.hidden = false;
+    setBar(statMpFill, statMpNum, lastStatus.mp ?? 0, lastStatus.maxMp ?? 0);
+    currentMp = Number(lastStatus.mp) || 0;
+    // 액션 패드의 「MP 부족 마법 숨김」 필터를 재평가 — 새로 시전 가능해진
+    // 마법이 즉시 패드에 다시 등장하도록.
+    if (typeof renderActionPad === 'function') renderActionPad();
+  }
+  if (partial.exp != null && statExpRow) {
+    if ((lastStatus.expNext || 0) > 0) {
+      statExpRow.hidden = false;
+      setBar(statExpFill, statExpNum, lastStatus.exp ?? 0, lastStatus.expNext ?? 0);
     }
   }
 }

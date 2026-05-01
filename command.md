@@ -282,3 +282,26 @@ export const KILLSTEAL_MOVE_BLOCK_MS = 5000;
   송신 통과 / 100ms 경계(99/100/101) / 소켓 readyState 분기 / `sock.send` throw /
   JSON 직렬화 실패 / 재연결 시 새 소켓 follow / 인스턴스 격리 / 30Hz 입력에서
   ~10 통과 sustained.
+- 1k 동접 관점 hot path 최적화 묶음.
+  - `Game.roomMembers = Map<roomId, Set<playerId>>` 인덱스 도입 — broadcastRoom /
+    `_pushRoomMonsters` / `_buildRoomPayload` / `_sendRoomSprites` / `_regenTick`
+    의 engagement scan / `_clearKillStealBlocksAgainst` / 같은 룸 attack/spell
+    observer 7 개 사이트가 `this.players.values()` 전체 순회에서 `_roomPlayers(roomId)`
+    iterator 로 교체. 룸 mutation 5 지점(register/_doMove/respawn/_addAuthenticatedPlayer/
+    `_unindexPlayer` via `_finalizePlayer`) 에서만 인덱스 갱신. 룸 단위 push 비용을
+    O(N_total) → O(N_room) 으로.
+  - `store.bySessionToken` 병행 인덱스 — `getUserBySessionToken` 을 선형 스캔에서
+    O(1) 룩업으로. WS connect / `/auth/me` 마다 호출되는 hot path 라 누적 가입자
+    수에 무관하게 비용 일정. 토큰 변동 4 지점(loginNaverUser 회전 / clearSessionToken /
+    reloadStateFromDb / `_resetForTesting`) 에서 동기화.
+  - `pushStatusDelta(player, partial)` 도입 — MP regen 이 풀 status 대신 `{ mp }`
+    한 필드만 송신. 클라 `applyStatusDelta` 가 lastStatus 캐시에 병합 후 영향
+    행만 setBar, 인벤토리/장비 DOM 재구성 skip. 1k 마법사 부족 상태에서의
+    직렬화·대역·클라 CPU 모두 절감.
+  - `SPELL_PREFIX_TABLE` 모듈 로드 시 prebuild — `_matchSpellPrefix` 가 매 cmd
+    마다 같은 후보 배열을 재구성하던 것을 한 번만.
+  - 클라 `renderStatus` 의 12 회 `getElementById` 를 모듈 상단 캐시로(`statClassEl`,
+    `statHpRow`, `statHpFill`, ...). 사이드바 DOM 은 라이프타임 동안 안 바뀜.
+  - `tests/game.test.js` 7 케이스 추가 — `_indexInRoom` idempotent / 마지막 멤버
+    제거 시 Set 자체 정리 / `_roomPlayers` 분리 / 정리 누락 race 안전 / `_unindexPlayer`
+    가 roomMembers 까지 / `pushStatusDelta` 페이로드 형태 + falsy no-op. 65/65 통과.

@@ -128,6 +128,11 @@ attack?, defense? }`. `qty > 1` 일 때만 `×N` 표시. equip-kind 아이템은
 - 경험치 획득·레벨업(`_grantExp`) — 마지막에 한 번만 push 해 같은 틱 내
   중복 송신 방지.
 - 마나 자가 회복 틱(`_regenTick`) — 마법사 한정, MP 가 실제로 변한 경우만.
+  단 풀 `pushStatus` 가 아닌 `pushStatusDelta(p, { mp: p.mp })` 로 partial 송신
+  → 클라가 `status_delta` 메시지로 받아 MP 행 + 액션 패드의 MP 필터만 갱신.
+  인벤토리/장비 DOM 재구성을 skip 해 1k 마법사가 모두 부족 상태일 때의
+  비용을 크게 줄인다(클라 `applyStatusDelta` 가 lastStatus 캐시에 병합한
+  뒤 영향받는 사이드바 행만 다시 그림).
 
 ## 레이아웃 고정 규칙 — 반드시 지킬 것
 

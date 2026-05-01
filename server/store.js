@@ -49,7 +49,12 @@ const SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS users (
 )`;
 const SESSION_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_users_session_token ON users(session_token)`;
 
-let state = { byNaverId: {} };
+// state.byNaverId: 사용자 본 레코드의 단일 진실원. state.bySessionToken: 토큰
+// → 사용자 객체 병행 인덱스로 getUserBySessionToken 을 O(1) 룩업으로 만든다
+// (옛 선형 스캔은 누적 가입자 N 이 늘수록 WS connect 시마다 비용이 증가했다).
+// 두 인덱스의 일관성은 토큰 변동 4 지점에서 동기화: loginNaverUser(회전),
+// clearSessionToken(로그아웃), reloadStateFromDb(부팅 reload), _resetForTesting.
+let state = { byNaverId: {}, bySessionToken: {} };
 let dirtyUserIds = new Set();
 let flushTimer = null;
 let flushPromise = null;
@@ -117,12 +122,12 @@ async function migrateLegacyJsonIfPresent() {
 }
 
 async function reloadStateFromDb() {
-  state = { byNaverId: {} };
+  state = { byNaverId: {}, bySessionToken: {} };
   const rs = await client.execute(
     'SELECT naver_id, provider, nickname, session_token, session_rotated_at, character_json, created_at, updated_at FROM users'
   );
   for (const row of rs.rows) {
-    state.byNaverId[row.naver_id] = {
+    const u = {
       provider: row.provider,
       providerUserId: row.naver_id,
       nickname: row.nickname || '',
@@ -132,6 +137,8 @@ async function reloadStateFromDb() {
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
     };
+    state.byNaverId[row.naver_id] = u;
+    if (u.sessionToken) state.bySessionToken[u.sessionToken] = u;
   }
 }
 
@@ -204,14 +211,11 @@ export function getUserByNaverId(naverId) {
   return state.byNaverId[String(naverId)] || null;
 }
 
-// 메모리 hot 캐시를 선형 스캔. 사용자 수가 1k 정도까지는 마이크로초 단위로 끝나
-// SQL 인덱스 룩업(밀리초)보다 빠르다 — WS connect 마다 호출되므로 hot path.
+// O(1) 룩업 — bySessionToken 인덱스 사용. WS connect / /auth/me 마다 호출되는
+// hot path 라 누적 가입자가 늘어도 비용 일정.
 export function getUserBySessionToken(token) {
   if (!token) return null;
-  for (const u of Object.values(state.byNaverId)) {
-    if (u.sessionToken && u.sessionToken === token) return u;
-  }
-  return null;
+  return state.bySessionToken[token] || null;
 }
 
 export function loginNaverUser({ providerUserId, nickname }) {
@@ -231,7 +235,14 @@ export function loginNaverUser({ providerUserId, nickname }) {
         createdAt: now,
         updatedAt: now,
       };
+  // 회전된 옛 토큰을 bySessionToken 에서 제거 — 다른 디바이스 로그인 시 자동
+  // 무효화의 단일성을 hot 캐시까지 일관 유지. 옛 spread 객체는 byNaverId 에서
+  // 곧장 교체돼 이미 도달 불가.
+  if (existing && existing.sessionToken && existing.sessionToken !== sessionToken) {
+    delete state.bySessionToken[existing.sessionToken];
+  }
   state.byNaverId[id] = rec;
+  state.bySessionToken[sessionToken] = rec;
   markDirty(id);
   return rec;
 }
@@ -240,6 +251,7 @@ export function clearSessionToken(naverId) {
   const id = String(naverId);
   const u = state.byNaverId[id];
   if (!u) return;
+  if (u.sessionToken) delete state.bySessionToken[u.sessionToken];
   u.sessionToken = null;
   u.updatedAt = Date.now();
   markDirty(id);
@@ -268,7 +280,7 @@ export async function _resetForTesting(newDataDir) {
     try { await client.close(); } catch {}
     client = null;
   }
-  state = { byNaverId: {} };
+  state = { byNaverId: {}, bySessionToken: {} };
   dirtyUserIds = new Set();
   initialized = false;
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }

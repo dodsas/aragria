@@ -153,6 +153,20 @@ const SPELL_DEFS = {
   },
 };
 
+// SPELL_DEFS 의 name + aliases 를 길이 내림차순으로 정렬한 prefix-match 후보표.
+// `_matchSpellPrefix` 가 매 cmd 마다 같은 결과를 재구성하던 것을 모듈 로드 시
+// 한 번 빌드해 매번 재사용. 더 긴 alias 가 짧은 alias 의 prefix 인 경우(예:
+// "파이어 볼" / "파이어볼") 긴 쪽이 먼저 매칭되도록 길이 내림차순.
+const SPELL_PREFIX_TABLE = (() => {
+  const arr = [];
+  for (const [id, spell] of Object.entries(SPELL_DEFS)) {
+    arr.push({ id, key: spell.name.toLowerCase() });
+    for (const a of spell.aliases || []) arr.push({ id, key: a.toLowerCase() });
+  }
+  arr.sort((a, b) => b.key.length - a.key.length);
+  return arr;
+})();
+
 // 누적 경험치 테이블. EXP_TABLE[lv-1] = 레벨 lv 가 되기 위한 누적 경험치.
 // 1레벨은 0 부터 시작. 표 길이가 곧 레벨 캡(현재 30).
 // 분기 기준이 되는 10레벨 지점은 1620 — 고블린(30)/해골(60) 기준 약 27마리.
@@ -299,6 +313,13 @@ export class Game {
     // 기존 디바이스의 sessionToken 이 회전돼 무효가 되고, 새 디바이스의 WS 가
     // 들어오는 순간 이 맵이 1:1 단일성을 보장한다.
     this.naverIdToPlayer = new Map();
+    // roomId → Set<playerId>. 룸 단위 broadcast/push (broadcastRoom,
+    // _pushRoomMonsters, _sendRoomSprites, regen 의 engagement 스캔) 가
+    // this.players.values() 전체 순회 대신 룸 멤버만 순회하도록 — 1k 플레이어
+    // 분산 시 룸당 비용을 O(N_total) → O(N_room) 으로 떨어뜨린다. 멤버십은
+    // _indexInRoom / _unindexFromRoom 헬퍼로 register/move/respawn/_finalizePlayer
+    // /_addAuthenticatedPlayer 다섯 mutation 지점에서만 동기화.
+    this.roomMembers = new Map();
     this.roomMonsters = new Map();
     this._spawnMonsters();
     this._startRegenTick();
@@ -331,21 +352,19 @@ export class Game {
         m.hp = next;
         anyChanged = true;
         // 교전 중인 플레이어들에게 combat 패널 갱신 — HP 바가 다시 차오르는
-        // 모습이 즉시 반영되도록.
+        // 모습이 즉시 반영되도록. roomMembers 인덱스로 같은 방만 순회.
         const engagementKey = `m${m.id}`;
-        for (const p of this.players.values()) {
-          if (p.combatTargetId !== engagementKey) continue;
-          if (p.roomId !== roomId) continue;
-          this.pushCombat(p, m, 'monster');
+        for (const p of this._roomPlayers(roomId)) {
+          if (p.combatTargetId === engagementKey) this.pushCombat(p, m, 'monster');
         }
       }
       if (anyChanged) this._pushRoomMonsters(roomId);
     }
 
     // 플레이어 MP 회복 — 마법사 한정, 1초당 0.33씩 누적해 3초마다 정수 1.
-    // 만렙 마법사 1k 명이 모두 부족 상태여도 한 틱당 1k pushStatus(약 200KB
-    // 직렬화) 수준으로 1k 동시 접속 목표 안에서 안전. mp 가 가득 찬 플레이어는
-    // 틱 비용 0 — Math.min 분기로 push 도 생략된다.
+    // 풀 pushStatus 대신 pushStatusDelta 로 mp 한 필드만 보낸다 — 1k 마법사가
+    // 모두 부족 상태일 때의 직렬화/대역/클라 재렌더 비용을 크게 줄이고, 클라
+    // 사이드의 inventory/equipment 풀 재구성도 skip 된다.
     if (!this._mpRegenAccum) this._mpRegenAccum = 0;
     this._mpRegenAccum += perTickRatio; // perTickRatio 는 초 단위 비율(1.0=1초)
     if (this._mpRegenAccum >= 3) {
@@ -355,7 +374,7 @@ export class Game {
         if (p.klass !== 'mage') continue;
         if (p.mp >= p.maxMp) continue;
         p.mp = Math.min(p.maxMp, p.mp + 1);
-        this.pushStatus(p);
+        this.pushStatusDelta(p, { mp: p.mp });
       }
     }
   }
@@ -380,18 +399,17 @@ export class Game {
       .map(id => ({ id, name: OBJECTS[id]?.name }))
       .filter(o => o.name);
     const players = [];
-    for (const o of this.players.values()) {
+    for (const o of this._roomPlayers(roomId)) {
       if (o.id === forPlayerId) continue;
       if (!o.registered || o.disconnectedAt != null) continue;
-      if (o.roomId !== roomId) continue;
       players.push({ id: o.id, name: o.name });
     }
     return { type: 'room_monsters', roomId, monsters, objects, players };
   }
 
   _pushRoomMonsters(roomId) {
-    for (const p of this.players.values()) {
-      if (p.roomId !== roomId || !p.registered || p.disconnectedAt != null) continue;
+    for (const p of this._roomPlayers(roomId)) {
+      if (!p.registered || p.disconnectedAt != null) continue;
       this.send(p, this._buildRoomPayload(roomId, p.id));
     }
   }
@@ -625,6 +643,32 @@ export class Game {
     if (!p) return;
     if (p.sid) this.sidToPlayer.delete(p.sid);
     if (p.naverId) this.naverIdToPlayer.delete(p.naverId);
+    if (p.roomId) this._unindexFromRoom(p, p.roomId);
+  }
+
+  // 룸 멤버 인덱스 갱신 — register/move/respawn/_addAuthenticatedPlayer/_finalizePlayer
+  // 다섯 지점에서만 호출. 같은 id 를 두 번 add 해도 Set 이 idempotent.
+  _indexInRoom(p, roomId) {
+    if (!p || !roomId) return;
+    let set = this.roomMembers.get(roomId);
+    if (!set) { set = new Set(); this.roomMembers.set(roomId, set); }
+    set.add(p.id);
+  }
+  _unindexFromRoom(p, roomId) {
+    if (!p || !roomId) return;
+    const set = this.roomMembers.get(roomId);
+    if (!set) return;
+    set.delete(p.id);
+    if (set.size === 0) this.roomMembers.delete(roomId);
+  }
+  // 룸 멤버 player 객체 iterator. 모든 룸 단위 hot path 가 이걸 통과한다.
+  * _roomPlayers(roomId) {
+    const ids = this.roomMembers.get(roomId);
+    if (!ids) return;
+    for (const id of ids) {
+      const p = this.players.get(id);
+      if (p) yield p;
+    }
   }
 
   // 같은 player 가 이미 in-memory 에 있을 때 — sid 또는 auth.naverId 매칭으로
@@ -709,6 +753,7 @@ export class Game {
     player.spriteSvg = saved.spriteSvg || null;
     player.roomId = saved.roomId && ROOMS[saved.roomId] ? saved.roomId : 'square';
     player.registered = true;
+    this._indexInRoom(player, player.roomId);
 
     this.send(player, { type: 'system', text: `${player.name}, 다시 만나서 반갑습니다.` });
     this.pushStatus(player);
@@ -945,6 +990,7 @@ export class Game {
     player.spriteSvg = svg; // null is fine — client falls back to default.
     player.registered = true;
     player.roomId = 'square';
+    this._indexInRoom(player, 'square');
 
     this.send(player, { type: 'system', text: `${cleanName}, 아그리아에 오신 것을 환영합니다.` });
     this.pushStatus(player);
@@ -984,9 +1030,8 @@ export class Game {
   // enforce and we lift it on every player still holding a block against them.
   _clearKillStealBlocksAgainst(blockerId, fromRoomId) {
     const now = Date.now();
-    for (const p of this.players.values()) {
+    for (const p of this._roomPlayers(fromRoomId)) {
       if (p.moveBlockedById !== blockerId) continue;
-      if (p.roomId !== fromRoomId) continue;
       if (p.moveBlockedUntil <= now) continue;
       p.moveBlockedUntil = 0;
       p.moveBlockedBy = null;
@@ -1085,8 +1130,8 @@ export class Game {
     const room = ROOMS[player.roomId];
     const exits = Object.keys(room.exits).map(d => DIR_LABEL[d] || d).join(', ') || '(없음)';
     const objs = room.objects.map(o => OBJECTS[o]?.name).filter(Boolean).join(', ') || '(없음)';
-    const others = [...this.players.values()]
-      .filter(p => p.registered && p.roomId === room.id && p.id !== player.id && p.disconnectedAt == null)
+    const others = [...this._roomPlayers(room.id)]
+      .filter(p => p.registered && p.id !== player.id && p.disconnectedAt == null)
       .map(p => p.name).join(', ');
     this.send(player, { type: 'text', text: `── ${room.name} ──` });
     this.send(player, { type: 'text', text: room.desc });
@@ -1153,9 +1198,8 @@ export class Game {
 
     // Disconnected players (in grace) remain findable so they can still be
     // engaged — disconnect doesn't grant invulnerability.
-    const someone = [...this.players.values()].find(p =>
-      p.roomId === player.roomId &&
-      (p.name === target || String(p.id) === target)
+    const someone = [...this._roomPlayers(player.roomId)].find(p =>
+      p.name === target || String(p.id) === target
     );
     if (someone) {
       return this._lookPlayer(player, someone, someone.id === player.id);
@@ -1249,7 +1293,9 @@ export class Game {
     // the helper can match on the (still-current) from-room.
     this._clearKillStealBlocksAgainst(player.id, player.roomId);
     this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 ${DIR_LABEL[d] || d}쪽으로 떠났습니다.` }, player.id);
+    this._unindexFromRoom(player, player.roomId);
     player.roomId = next;
+    this._indexInRoom(player, next);
     this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}님이 도착했습니다.` }, player.id);
     this.clearCombat(player);
     player.combatTargetId = null;
@@ -1280,19 +1326,14 @@ export class Game {
     // Send arriver's sprite to room mates (so they see this player in combat).
     if (arriver.spriteSvg) {
       const myMsg = { type: 'character_sprite', playerId: arriver.id, svg: arriver.spriteSvg };
-      for (const p of this.players.values()) {
-        if (p.id === arriver.id) continue;
-        if (!p.registered) continue;
-        if (p.roomId !== arriver.roomId) continue;
+      for (const p of this._roomPlayers(arriver.roomId)) {
+        if (p.id === arriver.id || !p.registered) continue;
         this.send(p, myMsg);
       }
     }
     // Send room mates' sprites to the arriver.
-    for (const p of this.players.values()) {
-      if (p.id === arriver.id) continue;
-      if (!p.registered) continue;
-      if (p.roomId !== arriver.roomId) continue;
-      if (!p.spriteSvg) continue;
+    for (const p of this._roomPlayers(arriver.roomId)) {
+      if (p.id === arriver.id || !p.registered || !p.spriteSvg) continue;
       this.send(arriver, { type: 'character_sprite', playerId: p.id, svg: p.spriteSvg });
     }
   }
@@ -1460,8 +1501,8 @@ export class Game {
       // Player: exact name or numeric id only. Substring matching dropped —
       // it let `attack 자` resolve to any 여행자N at random. Disconnected
       // players in grace remain valid targets.
-      const other = [...this.players.values()].find(p =>
-        p.id !== player.id && p.roomId === player.roomId && !p.downed &&
+      const other = [...this._roomPlayers(player.roomId)].find(p =>
+        p.id !== player.id && !p.downed &&
         (p.name === arg || String(p.id) === arg)
       );
       if (other) return this._attackPlayer(player, other);
@@ -1512,9 +1553,8 @@ export class Game {
     const engagementKey = `m${target.id}`;
     let killStealVictimName = null;
     let killStealVictimId = null;
-    for (const p of this.players.values()) {
+    for (const p of this._roomPlayers(player.roomId)) {
       if (p.id === player.id) continue;
-      if (p.roomId !== player.roomId) continue;
       if (p.combatTargetId !== engagementKey) continue;
       this.seg(p, [
         { text: player.name, cls: 'tx-player' },
@@ -1645,13 +1685,7 @@ export class Game {
     if (!input) return null;
     const trimmed = input.trim();
     const lo = trimmed.toLowerCase();
-    const candidates = [];
-    for (const [id, spell] of Object.entries(SPELL_DEFS)) {
-      candidates.push({ id, key: spell.name.toLowerCase() });
-      for (const a of spell.aliases || []) candidates.push({ id, key: a.toLowerCase() });
-    }
-    candidates.sort((a, b) => b.key.length - a.key.length);
-    for (const c of candidates) {
+    for (const c of SPELL_PREFIX_TABLE) {
       if (lo === c.key) return { spellId: c.id, rest: '' };
       if (lo.startsWith(c.key + ' ')) {
         return { spellId: c.id, rest: trimmed.slice(c.key.length).trim() };
@@ -1739,9 +1773,8 @@ export class Game {
     const engagementKey = `m${target.id}`;
     let killStealVictimName = null;
     let killStealVictimId = null;
-    for (const p of this.players.values()) {
+    for (const p of this._roomPlayers(player.roomId)) {
       if (p.id === player.id) continue;
-      if (p.roomId !== player.roomId) continue;
       if (p.combatTargetId !== engagementKey) continue;
       this.seg(p, [
         { text: player.name, cls: 'tx-player' },
@@ -1847,9 +1880,8 @@ export class Game {
     // Observers in the same room get a public combat log line. Other
     // engaged attackers (combatTargetId === pX) see the panel update too.
     const engagementKey = `p${target.id}`;
-    for (const p of this.players.values()) {
+    for (const p of this._roomPlayers(attacker.roomId)) {
       if (p.id === attacker.id || p.id === target.id) continue;
-      if (p.roomId !== attacker.roomId) continue;
       this.seg(p, [
         { text: attacker.name, cls: 'tx-player' },
         { text: '님이 ' },
@@ -1912,7 +1944,9 @@ export class Game {
     player.moveBlockedBy = null;
     player.moveBlockedById = null;
     player.hp = Math.floor(player.maxHp * 0.3);
+    if (fromRoom) this._unindexFromRoom(player, fromRoom);
     player.roomId = 'square';
+    this._indexInRoom(player, 'square');
     if (fromRoom !== 'square') {
       // Symmetric to the move case: anyone whose block was anchored to this
       // player's presence in fromRoom can move freely now.
@@ -1959,8 +1993,7 @@ export class Game {
 
   broadcastRoom(roomId, msg, ...exceptIds) {
     const payload = JSON.stringify(msg);
-    for (const p of this.players.values()) {
-      if (p.roomId !== roomId) continue;
+    for (const p of this._roomPlayers(roomId)) {
       if (exceptIds.includes(p.id)) continue;
       if (p.socket && p.socket.readyState === 1) p.socket.send(payload);
     }
@@ -2010,6 +2043,15 @@ export class Game {
         canChangeClass: player.klass === 'novice' && player.level >= 10 && player.roomId === 'square',
       },
     });
+  }
+
+  // 부분 갱신 — 풀 pushStatus 의 인벤토리/장비/spells 직렬화·전송·클라 재렌더
+  // 비용을 피하고 단일 또는 소수 필드만 흘려보낸다. MP 회복(3초 주기)처럼
+  // 「변동 필드는 하나 뿐인데 빈도가 높은」 신호에 적합. 클라는 status_delta 를
+  // 받으면 받은 필드만 사이드바에 patch 하고 인벤토리/장비 DOM 은 건드리지 않는다.
+  pushStatusDelta(player, partial) {
+    if (!partial || typeof partial !== 'object') return;
+    this.send(player, { type: 'status_delta', partial });
   }
 
   // `kind` is 'monster' | 'player' — describes the foe relative to the recipient.
