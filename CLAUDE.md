@@ -69,7 +69,7 @@ The server is unaware of modes — WASD is a thin client wrapper that emits the 
 
 - `npm start` — run the server (port 3000 by default, override via `PORT`).
 - `npm run dev` — run with `node --watch` for auto-reload on server file changes.
-- No tests yet. When adding tests, prefer running the actual `Game` class in-process over mocking the WS layer.
+- `npm test` — `node --test 'tests/*.test.js'`. 인증·스토어·HTTP/WS 통합 테스트가 들어 있다(`tests/store.test.js`, `tests/auth.test.js`, `tests/integration.test.js`). 통합 테스트는 실제 `server/index.js` 를 임의 포트에 띄우고 `AGRIA_DATA_DIR` 로 격리된 tmp 디렉터리를 가리키게 한다 — 새 기능을 추가할 때 같은 패턴(서브프로세스 + tmp dir + WS 클라이언트)을 따른다.
 
 ### Conventions
 

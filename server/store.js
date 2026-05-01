@@ -31,8 +31,15 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
+// 경로는 런타임에 결정 — AGRIA_DATA_DIR env 가 있으면 그 경로(테스트 격리용),
+// 없으면 기본 data/. const 로 한번에 캡처하면 테스트가 환경변수를 바꿔도 반영
+// 안 되므로 함수로 둔다.
+function dataDir() {
+  return process.env.AGRIA_DATA_DIR || path.join(__dirname, '..', 'data');
+}
+function usersFile() {
+  return path.join(dataDir(), 'users.json');
+}
 
 const FLUSH_DEBOUNCE_MS = 1500;
 
@@ -43,14 +50,14 @@ let flushPromise = null;
 let initialized = false;
 
 async function ensureDir() {
-  try { await fs.mkdir(DATA_DIR, { recursive: true }); } catch {}
+  try { await fs.mkdir(dataDir(), { recursive: true }); } catch {}
 }
 
 export async function initStore() {
   if (initialized) return;
   await ensureDir();
   try {
-    const raw = await fs.readFile(USERS_FILE, 'utf8');
+    const raw = await fs.readFile(usersFile(), 'utf8');
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && parsed.byNaverId) {
       state = parsed;
@@ -69,10 +76,11 @@ export async function flushNow() {
   flushPromise = (async () => {
     try {
       await ensureDir();
-      const tmp = USERS_FILE + '.tmp';
+      const target = usersFile();
+      const tmp = target + '.tmp';
       const json = JSON.stringify(state, null, 2);
       await fs.writeFile(tmp, json, 'utf8');
-      await fs.rename(tmp, USERS_FILE);
+      await fs.rename(tmp, target);
       dirty = false;
     } catch (err) {
       console.error('[store] flush failed:', err.message);
@@ -153,6 +161,17 @@ export function saveCharacterFor(naverId, snapshot) {
 export function getCharacterFor(naverId) {
   const u = getUserByNaverId(naverId);
   return u?.character || null;
+}
+
+// 테스트 전용 — 모듈 in-memory 상태와 디스크 핸들 타이머를 깨끗이 비우고
+// optional 로 새 데이터 디렉터리를 가리키도록. 운영 코드에서는 호출 금지.
+export function _resetForTesting(newDataDir) {
+  state = { byNaverId: {} };
+  dirty = false;
+  initialized = false;
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  flushPromise = null;
+  if (newDataDir) process.env.AGRIA_DATA_DIR = newDataDir;
 }
 
 // 종료 시 잔여 dirty flush 보장. SIGINT/SIGTERM 둘 다 받아 한 번씩.
