@@ -8,6 +8,7 @@ import {
   CMD_RATE_PER_SEC, CMD_BURST, RECONNECT_GRACE_MS,
   NAME_MAX_LEN, NAME_MIN_LEN, DESC_MAX_LEN, DESC_MIN_LEN,
   REGISTRATION_ENABLED, AUTO_REGISTER_DESC,
+  isAdminNaverId,
 } from './config.js';
 import { loadZones } from './zones/index.js';
 import { generateCharacterSprite, getDefaultCharacterSprite } from './sprite.js';
@@ -1281,6 +1282,12 @@ export class Game {
       case 'help':
       case '도움말': case '도움': case '명령어': case '명령':
         return this.send(player, { type: 'text', text: '명령: 보기 [대상], 이동 <방향>, 공격 <대상/플레이어>, 말 <내용>, 사용 <아이템>, 장착 <장비>, 해제 <슬롯>, 전직 <직업>, <마법명> <대상>, 스킬, 도움말' });
+      case 'reset':
+      case '리셋': case '초기화':
+        // 관리자 전용 — Game.resetCharacter 가 admin 검증 + 대상 이름 해석을 모두
+        // 처리. 비관리자 호출은 거기서 「관리자 명령입니다」 로 거부되어 일반
+        // 사용자도 명령 자체는 받아들여지나 결과 라인이 invariant.
+        return this.resetCharacter(player, arg);
       default:
         if (['north','south','east','west','n','s','e','w','북','남','동','서','북쪽','남쪽','동쪽','서쪽'].includes(cmd)) {
           return this.move(player, cmd);
@@ -2281,6 +2288,102 @@ export class Game {
     const msg = text.length > SAY_MAX_LEN ? text.slice(0, SAY_MAX_LEN) : text;
     player.lastSayAt = now;
     this.broadcastRoom(player.roomId, { type: 'text', text: `${player.name}: "${msg}"` });
+  }
+
+  // --- admin commands ---
+
+  // 관리자 권한 검증 — naverId 가 AGRIA_ADMIN_NAVER_IDS env 에 든 사용자만 true.
+  // 익명/sid-only 사용자는 naverId 가 null 이라 영원히 false. config.isAdminNaverId
+  // 가 단일 진실원 — 캐시 무효화도 그쪽에서.
+  isAdmin(player) {
+    return !!(player && player.naverId && isAdminNaverId(player.naverId));
+  }
+
+  // 관리자 전용 — 대상 캐릭터를 신규 캐릭터 baseline 으로 초기화. 효과:
+  // klass→novice, level→1, exp→0, equipment/inventory→starting, hp/mp→max,
+  // roomId→square 텔레포트, combat/pending intent/모든 페널티 정리, mpRegen
+  // 인덱스 제거(novice 는 mp 자원 안 씀), 영속. 사용자가 보유한 모든 진행을
+  // 되돌리는 파괴적 작업 — 동의 모달 없이 즉시 발화하므로 실수 입력 주의.
+  // 비관리자 호출은 「관리자 명령입니다」 로 거부. 대상은 같은 이름의 등록된
+  // (registered=true) 플레이어 한 명 — 미등록 stub / generating 중 / disconnected
+  // 상태도 매칭(disconnected 는 reconnect 시 새 baseline 으로 깨어남).
+  resetCharacter(admin, targetArg) {
+    if (!this.isAdmin(admin)) {
+      return this.send(admin, { type: 'system', text: '관리자 명령입니다.' });
+    }
+    const name = String(targetArg || '').trim();
+    if (!name) {
+      return this.send(admin, { type: 'system', text: '대상 이름을 지정하세요. 사용법: `리셋 <이름>`' });
+    }
+    let target = null;
+    for (const p of this.players.values()) {
+      if (p.registered && p.name === name) { target = p; break; }
+    }
+    if (!target) {
+      return this.send(admin, { type: 'system', text: `'${name}' 을(를) 찾을 수 없습니다.` });
+    }
+
+    const fromRoom = target.roomId;
+
+    // Pending intents 가 옛 룸/타깃을 가리키므로 reset 직전에 cancel.
+    if (target.pendingMove) { clearTimeout(target.pendingMove.timer); target.pendingMove = null; }
+    if (target.pendingAttack) { clearTimeout(target.pendingAttack.timer); target.pendingAttack = null; }
+
+    // Stat / 자원 / 장비·인벤토리 초기화. 신규 등록과 같은 baseline.
+    target.klass = 'novice';
+    target.level = 1;
+    target.exp = 0;
+    target.maxHp = classMaxHp('novice', 1);
+    target.maxMp = classMaxMp('novice', 1);
+    target.hp = target.maxHp;
+    target.mp = target.maxMp;
+    target.equipment = STARTING_EQUIPMENT();
+    target.inventory = STARTING_INVENTORY();
+
+    // 전투 / 페널티 / 죽음 플래그 정리.
+    target.combatTargetId = null;
+    target.downed = false;
+    target.moveBlockedUntil = 0;
+    target.moveBlockedBy = null;
+    target.moveBlockedById = null;
+
+    // novice 는 MP 자원 안 씀 → mpRegen sweep 대상에서 제거. 회전 race 안전.
+    this.mpRegen.delete(target.id);
+
+    // 광장으로 텔레포트 — 옛 룸의 멤버 인덱스 / 그 방의 다른 사람 시야 정리.
+    if (fromRoom && fromRoom !== 'square') {
+      this._unindexFromRoom(target, fromRoom);
+      target.roomId = 'square';
+      this._indexInRoom(target, 'square');
+      this._clearKillStealBlocksAgainst(target.id, fromRoom);
+      this.broadcastRoom(fromRoom, { type: 'text', text: `${target.name}님이 사라졌다.` });
+      this._pushRoomMonsters(fromRoom);
+    } else if (!fromRoom) {
+      // 그레이스 중인 disconnected 가 roomId=null 일 때 — 광장 인덱스만 add.
+      target.roomId = 'square';
+      this._indexInRoom(target, 'square');
+    }
+
+    // 관리자에게 결과 보고 + 대상에게도 안내(접속 중일 때만 send 가 실효, 그 외엔
+    // 다음 attach 시 fresh baseline 을 보게 된다). 대상이 admin 자신이면 두 라인
+    // 중복 안내를 피하기 위해 self 분기.
+    this.send(admin, { type: 'system', text: `${target.name} 을(를) 레벨 1 노비스로 초기화했습니다.` });
+    if (target.id !== admin.id) {
+      this.send(target, { type: 'system', text: '관리자에 의해 캐릭터가 초기화되었습니다. 광장에서 다시 시작합니다.' });
+    }
+
+    // 클라 패널 / 룸 시야 갱신 + 영속. clearCombat 은 combat 패널을 닫아 옛
+    // foe 가 잔존하지 않도록.
+    this.clearCombat(target);
+    this.pushStatus(target);
+    this.describeRoom(target);
+    this.broadcastRoom('square', { type: 'text', text: `${target.name}님이 광장에 다시 나타났다.` }, target.id);
+    this._pushRoomMonsters('square');
+    this._persistPlayer(target);
+
+    // Audit — 누가 누구를 reset 했는지 운영 로그에 남긴다. 관리자 권한 오남용
+    // 추적용. naverId 까지 같이 박아 같은 닉네임 다른 계정 구분 가능.
+    console.log(`[admin] ${admin.name}(${admin.naverId}) reset ${target.name}(${target.naverId || '-'})`);
   }
 
   // --- helpers ---

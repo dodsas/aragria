@@ -100,3 +100,26 @@ export const NAME_MAX_LEN = 16;
 // distinctive but is capped to keep the prompt cheap and predictable.
 export const DESC_MIN_LEN = 5;
 export const DESC_MAX_LEN = 200;
+
+// --- Admin authorization ---
+
+// 관리자 권한 식별. AGRIA_ADMIN_NAVER_IDS env(콤마 구분, 공백 허용) 에 든
+// naver 사용자만 admin 명령(현재 `리셋 <이름>` — Game.resetCharacter) 을 사용할
+// 수 있다. 비어 있거나 미설정이면 admin 권한 가진 사용자가 0 명 — 모든 admin
+// 명령이 「관리자 명령입니다」 system 라인으로 거부. 익명/sid-only 사용자는
+// 영원히 admin 이 될 수 없다(naverId 가 null 이라 매칭 자체 실패).
+//
+// 캐시는 env 값이 변동하면 자동 무효화되어 테스트가 process.env 를 갈아끼울
+// 때 그대로 따라간다. 운영에서는 부팅 시 한 번 set 하므로 캐시 효과 100%.
+let _adminCache = { raw: undefined, set: null };
+export function isAdminNaverId(naverId) {
+  if (!naverId) return false;
+  const raw = process.env.AGRIA_ADMIN_NAVER_IDS || '';
+  if (raw !== _adminCache.raw) {
+    _adminCache.raw = raw;
+    _adminCache.set = new Set(
+      raw.split(',').map(s => s.trim()).filter(Boolean)
+    );
+  }
+  return _adminCache.set.has(String(naverId));
+}

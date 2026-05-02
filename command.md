@@ -233,6 +233,80 @@ export const KILLSTEAL_MOVE_BLOCK_MS = 5000;
 
 값은 `config.js` 에서만 수정한다. `game.js` 는 직접 숫자를 박지 않는다.
 
+## 관리자 명령 (admin)
+
+일반 게임 명령과 분리된 관리자 전용 채널. 진입점은 같은 `cmd` 메시지지만
+`Game.isAdmin(player)` 검증을 통과해야 효과가 발생한다.
+
+### 권한 모델
+
+- 권한 식별은 **네이버 OAuth 의 `naverId`** 한 가지 — 익명/sid-only 사용자는
+  영원히 admin 이 될 수 없다. 미인증 사용자는 admin 명령을 시도해도
+  `naverId` 가 null 이라 매칭 자체에서 false.
+- allowlist 는 `AGRIA_ADMIN_NAVER_IDS` env(콤마 구분, 공백 허용) 에 둔다.
+  비어 있거나 미설정이면 admin 0 명 — 모든 admin 명령이 「관리자
+  명령입니다」 로 거부.
+- 권한 검증 단일 진실원: `server/config.js` 의 `isAdminNaverId(naverId)`.
+  캐시는 env 값 변동 시 자동 무효화 — 운영에서는 부팅 시 한 번 set 하므로
+  캐시 100%, 테스트는 `process.env.AGRIA_ADMIN_NAVER_IDS` 갈아끼우면 즉시 추종.
+
+### 사용 가능한 명령
+
+| 입력                              | 메서드                                      | 효과                                                                         |
+|-----------------------------------|---------------------------------------------|------------------------------------------------------------------------------|
+| `리셋 <이름>` / `초기화 <이름>` / `reset <이름>` | `Game.resetCharacter(admin, targetArg)`  | 대상 캐릭터를 신규 baseline(novice L1) 으로 초기화 + 광장 텔레포트 + 영속.  |
+
+### `리셋 <이름>` 의 효과
+
+대상은 같은 이름의 등록된(registered=true) 플레이어 한 명. disconnected
+(grace 중) / generating 도 매칭 — disconnected 라면 다음 reattach 시 새
+baseline 으로 깨어난다. 효과:
+
+- `klass` → `novice`, `level` → 1, `exp` → 0
+- `maxHp / maxMp` 재계산(`classMaxHp('novice', 1)` / `classMaxMp('novice', 1)`)
+  → `hp / mp` 가득
+- `equipment` → `STARTING_EQUIPMENT()` (튜닉·단검·부츠 시작 세트)
+- `inventory` → `STARTING_INVENTORY()` (체력 물약 ×10, 빵 ×2, 밧줄 ×1)
+- `roomId` → `square` (옛 룸의 멤버 인덱스에서 빠지고 같은 룸 사람들에게
+  「{이름}님이 사라졌다」 라인 송출)
+- `combatTargetId` / `pendingMove` / `pendingAttack` / `downed` / `moveBlocked*`
+  모두 정리 — pending 타이머는 clearTimeout 으로 cancel
+- `mpRegen` 인덱스에서 제거(novice 는 mp 자원 없음)
+- 관리자에게 「{이름} 을(를) 레벨 1 노비스로 초기화했습니다」 system 라인,
+  대상에게 「관리자에 의해 캐릭터가 초기화되었습니다. 광장에서 다시
+  시작합니다」 system 라인. 같은 사람(self-reset) 일 땐 한 줄만.
+- 광장에 「{이름}님이 광장에 다시 나타났다」 입장 라인 broadcast.
+- 클라 사이드바·전투 패널 갱신: `clearCombat` → `pushStatus` → `describeRoom`.
+- 영속 — `_persistPlayer(target)` 가 디스크에 새 baseline flush.
+- 운영 audit log: `[admin] {admin.name}({admin.naverId}) reset {target.name}({target.naverId})`.
+
+이 작업은 **파괴적**이며 동의 모달 없이 즉시 발화한다 — 대상의 모든 진행
+(레벨/EXP/직업 분기/획득한 장비/드랍·구매한 인벤토리)이 영구 삭제된다. 대상
+이름 오타로 다른 사람을 리셋하지 않도록 admin 본인이 신중히 입력해야 한다.
+
+### 향후 admin 명령 TODO
+
+현재는 `리셋` 단일 — 운영 중 자주 필요해지는 도구가 발견되면 같은 권한
+모델 위에 추가:
+
+- `킥 <이름>` — 대상의 WS 를 즉시 close(4001 'kicked by admin'). 어뷰저
+  강제 퇴장.
+- `밴 <naverId>` — naverId 를 차단 리스트에 추가, attach 시점 거부.
+- `소환 <이름>` — 대상을 자기 룸으로 소환(현재 광장 텔레포트만).
+- `방송 <메시지>` — 모든 룸에 system 라인 broadcast(점검 안내 등).
+- `give <이름> <itemId> [수량]` — 대상 인벤토리에 아이템 지급.
+- `setlevel <이름> <레벨>` — 디버깅용 레벨 직접 설정.
+
+새 admin 명령을 추가할 때:
+
+1. `Game` 클래스 내부에 메서드 추가, 첫 줄에 `if (!this.isAdmin(admin)) return ...`.
+2. `handleCommand` switch 에 case 추가 (한국어/영문 alias 포함).
+3. 본 절의 매트릭스에 한 줄 추가.
+4. `tests/game.test.js` 의 「관리자 명령 회귀 가드」 절에 권한 거부 + 효과
+   + edge case(대상 미존재, 인자 누락) 검증 추가.
+5. 파괴적 효과(데이터 삭제, 강제 종료 등)면 audit log(`console.log('[admin] ...')`)
+   에 actor + target + naverId 를 기록.
+
 ## 새 명령에 rate limit 을 추가할 때
 
 1. `server/config.js` 에 `<COMMAND>_COOLDOWN_MS` 상수 추가.
@@ -305,3 +379,9 @@ export const KILLSTEAL_MOVE_BLOCK_MS = 5000;
   - `tests/game.test.js` 7 케이스 추가 — `_indexInRoom` idempotent / 마지막 멤버
     제거 시 Set 자체 정리 / `_roomPlayers` 분리 / 정리 누락 race 안전 / `_unindexPlayer`
     가 roomMembers 까지 / `pushStatusDelta` 페이로드 형태 + falsy no-op. 65/65 통과.
+- 관리자 명령 채널 도입 — `AGRIA_ADMIN_NAVER_IDS` env allowlist + `Game.isAdmin` /
+  `Game.resetCharacter` / `리셋 <이름>` 디스패치. 운영자가 어뷰저나 테스트
+  계정을 신규 baseline(novice L1, 시작 장비/인벤, 광장) 으로 되돌릴 수 있다.
+  파괴적 작업이라 audit log(`[admin] {actor} reset {target}`) 도 함께. 회귀
+  가드 4 케이스 — env 분기 / 비관리자 거부 / 풀 reset 효과(stat/직업/장비/
+  인벤토리/룸/mpRegen) / 인자 누락·미존재 분기. 89/89 통과.

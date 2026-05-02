@@ -646,6 +646,133 @@ test('_totalDefense: 직업 defBonus 가 장비 합에 더해진다 (전사 +2, 
   }
 });
 
+// ── 관리자 명령 (resetCharacter) 회귀 가드 ────────────────────────────
+
+function makeAdminPlayer(id, naverId, sentArr) {
+  return {
+    id, sid: '', naverId, name: `admin${id}`, registered: true, klass: 'novice',
+    level: 1, exp: 0, roomId: 'square',
+    equipment: { head: null, body: null, weapon: null, offhand: null, feet: null },
+    inventory: [], hp: 100, maxHp: 100, mp: 0, maxMp: 0,
+    icon: '🧙',
+    socket: { readyState: 1, send: (raw) => sentArr.push(JSON.parse(raw)) },
+  };
+}
+
+function makeTargetPlayer(id, name, sentArr, overrides = {}) {
+  return {
+    id, sid: '', naverId: 'target_naver', name, registered: true, klass: 'mage',
+    level: 15, exp: 4000, roomId: 'forest_2_2',
+    equipment: { head: null, body: null, weapon: null, offhand: null, feet: null },
+    inventory: [{ id: 'goblin_dagger', name: '고블린의 단검', icon: '⚔', kind: 'equip', slot: 'weapon', attack: 8, qty: 1 }],
+    hp: 50, maxHp: 240, mp: 30, maxMp: 100,
+    icon: '🧙', combatTargetId: 'm123', downed: false,
+    moveBlockedUntil: 0, moveBlockedBy: null, moveBlockedById: null,
+    socket: { readyState: 1, send: (raw) => sentArr.push(JSON.parse(raw)) },
+    ...overrides,
+  };
+}
+
+test('isAdmin: AGRIA_ADMIN_NAVER_IDS env 에 든 naverId 만 true', () => {
+  const g = new Game();
+  const before = process.env.AGRIA_ADMIN_NAVER_IDS;
+  process.env.AGRIA_ADMIN_NAVER_IDS = 'naver_admin1, naver_admin2 ';
+  try {
+    assert.equal(g.isAdmin({ naverId: 'naver_admin1' }), true);
+    assert.equal(g.isAdmin({ naverId: 'naver_admin2' }), true, '공백 trim 후 매칭');
+    assert.equal(g.isAdmin({ naverId: 'naver_other' }), false);
+    assert.equal(g.isAdmin({ naverId: null }), false);
+    assert.equal(g.isAdmin({}), false);
+    assert.equal(g.isAdmin(null), false);
+    // env 갈아끼우면 캐시 무효화로 따라간다.
+    process.env.AGRIA_ADMIN_NAVER_IDS = '';
+    assert.equal(g.isAdmin({ naverId: 'naver_admin1' }), false, 'env 비우면 admin 0명');
+  } finally {
+    if (before === undefined) delete process.env.AGRIA_ADMIN_NAVER_IDS;
+    else process.env.AGRIA_ADMIN_NAVER_IDS = before;
+  }
+});
+
+test('resetCharacter: 비관리자 호출은 「관리자 명령입니다」 로 거부, 대상 무변동', () => {
+  const g = new Game();
+  const before = process.env.AGRIA_ADMIN_NAVER_IDS;
+  process.env.AGRIA_ADMIN_NAVER_IDS = 'naver_admin';
+  try {
+    const sentByAdmin = []; const sentByTarget = [];
+    const fakeAdmin = makeAdminPlayer(1, 'not_admin', sentByAdmin);
+    const target = makeTargetPlayer(2, '시드영웅', sentByTarget);
+    g.players.set(fakeAdmin.id, fakeAdmin);
+    g.players.set(target.id, target);
+    g._indexInRoom(fakeAdmin, 'square');
+    g._indexInRoom(target, 'forest_2_2');
+    g.resetCharacter(fakeAdmin, '시드영웅');
+    // 거부 라인이 admin 에게만 보내짐, 대상 stat 그대로.
+    const sysLine = sentByAdmin.find(m => m.type === 'system');
+    assert.match(sysLine.text, /관리자 명령/);
+    assert.equal(target.level, 15, '대상 레벨 유지');
+    assert.equal(target.klass, 'mage', '대상 직업 유지');
+  } finally {
+    if (before === undefined) delete process.env.AGRIA_ADMIN_NAVER_IDS;
+    else process.env.AGRIA_ADMIN_NAVER_IDS = before;
+  }
+});
+
+test('resetCharacter: 관리자 호출은 stat/직업/장비/인벤토리/룸 모두 baseline 으로 되돌림', () => {
+  const g = new Game();
+  const before = process.env.AGRIA_ADMIN_NAVER_IDS;
+  process.env.AGRIA_ADMIN_NAVER_IDS = 'naver_admin';
+  try {
+    const sentByAdmin = []; const sentByTarget = [];
+    const admin = makeAdminPlayer(1, 'naver_admin', sentByAdmin);
+    const target = makeTargetPlayer(2, '시드영웅', sentByTarget);
+    g.players.set(admin.id, admin);
+    g.players.set(target.id, target);
+    g._indexInRoom(admin, 'square');
+    g._indexInRoom(target, 'forest_2_2');
+    g.mpRegen.add(target.id); // 옛 mage 라 등록돼 있던 인덱스
+    g.resetCharacter(admin, '시드영웅');
+
+    assert.equal(target.klass, 'novice');
+    assert.equal(target.level, 1);
+    assert.equal(target.exp, 0);
+    assert.equal(target.maxHp, 100, 'novice L1 maxHp');
+    assert.equal(target.maxMp, 0);
+    assert.equal(target.hp, 100, '체력 가득');
+    assert.equal(target.mp, 0);
+    assert.equal(target.roomId, 'square', '광장으로 텔레포트');
+    assert.ok(target.equipment.body, 'starting 튜닉');
+    assert.ok(target.equipment.weapon, 'starting 단검');
+    assert.ok(target.inventory.length >= 1, 'starting 인벤토리(포션/빵/밧줄)');
+    assert.equal(target.combatTargetId, null, '전투 정리');
+    assert.equal(g.mpRegen.has(target.id), false, 'mpRegen 인덱스에서 제거(novice)');
+    // 룸 멤버 인덱스 동기화 — fromRoom 에서 빠지고 square 에 들어감.
+    assert.equal(g.roomMembers.has('forest_2_2'), false, 'fromRoom 마지막 멤버였으니 정리');
+    assert.ok(g.roomMembers.get('square').has(target.id));
+  } finally {
+    if (before === undefined) delete process.env.AGRIA_ADMIN_NAVER_IDS;
+    else process.env.AGRIA_ADMIN_NAVER_IDS = before;
+  }
+});
+
+test('resetCharacter: 대상 이름 비어 있으면 사용법 안내, 미존재면 not-found', () => {
+  const g = new Game();
+  const before = process.env.AGRIA_ADMIN_NAVER_IDS;
+  process.env.AGRIA_ADMIN_NAVER_IDS = 'naver_admin';
+  try {
+    const sent = [];
+    const admin = makeAdminPlayer(1, 'naver_admin', sent);
+    g.players.set(admin.id, admin);
+    g._indexInRoom(admin, 'square');
+    g.resetCharacter(admin, '');
+    assert.match(sent.pop().text, /사용법/);
+    g.resetCharacter(admin, '없는사람');
+    assert.match(sent.pop().text, /찾을 수 없습니다/);
+  } finally {
+    if (before === undefined) delete process.env.AGRIA_ADMIN_NAVER_IDS;
+    else process.env.AGRIA_ADMIN_NAVER_IDS = before;
+  }
+});
+
 test('_addMonsterToRoom / _removeMonsterFromRoom: O(1) get/delete + 빈 Map 정리', () => {
   const g = new Game();
   const m1 = { id: 9001, defId: 'goblin', name: '고블린', icon: '🧌', hp: 20, maxHp: 20 };
