@@ -323,12 +323,14 @@ test('_pushRoomMonsters: 룸당 페이로드를 한 번만 만들어 모든 수�
   assert.equal(parsed.players.length, 2);
 });
 
-// ── mages 인덱스: 동기화 회귀 가드 ───────────────────────────────────
+// ── mpRegen 인덱스: 동기화 회귀 가드 ───────────────────────────────────
 
-test('mages 인덱스: changeClass(novice→mage) 시 add, _unindexPlayer 시 정리', () => {
+test('mpRegen 인덱스: changeClass(novice→mage) 시 add, _unindexPlayer 시 정리', () => {
   const g = new Game();
   // changeClass 의 사전조건(레벨 10 + 광장 + novice) 을 충족시킨 player 를
-  // 직접 푸시. 호출 후 mages Set 에 add 되는지만 검증.
+  // 직접 푸시. 호출 후 mpRegen Set 에 add 되는지만 검증. mpRegen 은 mp 자원을
+  // 쓰는 직업(mage/healer/bard) 의 일반 인덱스 — 마법사뿐 아니라 healer/bard
+  // 도 같은 인덱스로 들어가 _regenTick 의 MP 회복 sweep 대상이 된다.
   const p = {
     id: 7, sid: '', name: 'novicy', registered: true, klass: 'novice',
     level: 10, exp: 0, roomId: 'square', socket: null,
@@ -337,19 +339,20 @@ test('mages 인덱스: changeClass(novice→mage) 시 add, _unindexPlayer 시 �
   };
   g.players.set(p.id, p);
   g._indexInRoom(p, 'square');
-  assert.equal(g.mages.has(7), false);
+  assert.equal(g.mpRegen.has(7), false);
 
   g.changeClass(p, '마법사');
   assert.equal(p.klass, 'mage');
-  assert.equal(g.mages.has(7), true);
+  assert.equal(g.mpRegen.has(7), true);
 
   g._unindexPlayer(p);
-  assert.equal(g.mages.has(7), false);
+  assert.equal(g.mpRegen.has(7), false);
 });
 
-test('_regenTick: mages 인덱스 외 플레이어는 MP 회복 분기 진입 안 함', () => {
-  // 옛 코드는 this.players.values() 전체를 돌며 klass 분기. 새 코드는 mages
-  // 인덱스만 순회 — novice 가 1k 명이어도 분기 통과 비용이 0.
+test('_regenTick: mpRegen 인덱스 외 플레이어는 MP 회복 분기 진입 안 함', () => {
+  // 옛 코드는 this.players.values() 전체를 돌며 klass==='mage' 분기. 새 코드는
+  // mpRegen 인덱스만 순회 — novice/warrior/thief/archer 가 1k 명이어도 분기
+  // 통과 비용이 0.
   const g = new Game();
   const sent = [];
   const novice = {
@@ -362,7 +365,7 @@ test('_regenTick: mages 인덱스 외 플레이어는 MP 회복 분기 진입 �
   };
   g.players.set(novice.id, novice);
   g.players.set(mage.id, mage);
-  g.mages.add(mage.id); // novice 는 인덱스에 없음
+  g.mpRegen.add(mage.id); // novice 는 인덱스에 없음
   g._mpRegenAccum = 3; // 즉시 회복 분기 진입
   g._regenTick(0); // perTickRatio=0 — 누적 안 늘리고 분기만 검증
 
@@ -528,6 +531,120 @@ test('pushStatus: mage 의 spells 페이로드가 레벨별 minLevel 필터 결�
 });
 
 // ── roomMonsters Map<monId, monster> 인덱스: H4 회귀 가드 ───────────
+
+// ── 직업 시스템 (warrior/mage/thief/archer/healer/bard) 회귀 가드 ───────
+
+function makeReadyToChangeClass(id) {
+  return {
+    id, sid: '', name: `n${id}`, registered: true, klass: 'novice',
+    level: 10, exp: 0, roomId: 'square', socket: null,
+    equipment: { head: null, body: null, weapon: null, offhand: null, feet: null },
+    inventory: [], hp: 100, maxHp: 100, mp: 0, maxMp: 0, naverId: null,
+  };
+}
+
+test('changeClass: 6 직업 모두 한국어/영문 alias 로 전직 가능', () => {
+  // CHANGE_CLASS_ALIASES 의 매트릭스가 한 직업이라도 누락되면 전직 자체가 막힘.
+  const transitions = [
+    ['전사', 'warrior'], ['warrior', 'warrior'],
+    ['마법사', 'mage'], ['mage', 'mage'],
+    ['도둑', 'thief'], ['thief', 'thief'],
+    ['궁수', 'archer'], ['archer', 'archer'],
+    ['힐러', 'healer'], ['healer', 'healer'],
+    ['음유시인', 'bard'], ['bard', 'bard'],
+  ];
+  for (const [input, expected] of transitions) {
+    const g = new Game();
+    const p = makeReadyToChangeClass(100);
+    g.players.set(p.id, p);
+    g._indexInRoom(p, 'square');
+    g.changeClass(p, input);
+    assert.equal(p.klass, expected, `${input} → ${expected}`);
+  }
+});
+
+test('classMaxHp: 직업별로 다른 baseline + 성장률', () => {
+  // novice 기준선과 모든 직업의 LV1·LV30 수치가 CLASS_DEFS 와 일치.
+  // 기존 캐릭터 hydrate 는 saved.maxHp 보존이라 영향 없음 — 새 캐릭터부터.
+  const g = new Game();
+  // L1 기본
+  const p = makeReadyToChangeClass(1);
+  g.players.set(p.id, p);
+  g._indexInRoom(p, 'square');
+  // 전사로 전직 후 maxHp 는 130 + 14×9 = 256 (L10).
+  g.changeClass(p, '전사');
+  assert.equal(p.maxHp, 130 + 14 * 9, '전사 L10 maxHp');
+  // 도둑 — 다른 인스턴스, fresh.
+  const p2 = makeReadyToChangeClass(2);
+  g.players.set(p2.id, p2);
+  g._indexInRoom(p2, 'square');
+  g.changeClass(p2, '도둑');
+  assert.equal(p2.maxHp, 90 + 9 * 9, '도둑 L10 maxHp');
+});
+
+test('classMaxMp: mage/healer/bard 만 양수, 나머지는 0', () => {
+  // mp 사용군과 비사용군의 분기가 올바른지 확인.
+  const cases = [
+    ['전사', 0], ['도둑', 0], ['궁수', 0],
+    ['마법사', 30 + 5 * 9], ['힐러', 35 + 6 * 9], ['음유시인', 25 + 4 * 9],
+  ];
+  for (const [input, expectedL10] of cases) {
+    const g = new Game();
+    const p = makeReadyToChangeClass(1);
+    g.players.set(p.id, p);
+    g._indexInRoom(p, 'square');
+    g.changeClass(p, input);
+    assert.equal(p.maxMp, expectedL10, `${input} L10 maxMp`);
+  }
+});
+
+test('mpRegen 인덱스: mage/healer/bard 는 add, 그 외는 delete', () => {
+  // _regenTick 의 MP sweep 대상이 정확한지 검증 — mp 자원 안 쓰는 직업이 인덱스에
+  // 들어가면 매 3 초 무의미한 push 가 1k 명에게 나간다.
+  const cases = [
+    ['전사', false], ['도둑', false], ['궁수', false],
+    ['마법사', true], ['힐러', true], ['음유시인', true],
+  ];
+  for (const [input, expected] of cases) {
+    const g = new Game();
+    const p = makeReadyToChangeClass(99);
+    g.players.set(p.id, p);
+    g._indexInRoom(p, 'square');
+    g.changeClass(p, input);
+    assert.equal(g.mpRegen.has(99), expected, `${input} mpRegen 등록`);
+  }
+});
+
+test('_totalAttack: 직업 atkBonus 가 장비 합에 더해진다 (전사 +3, 도둑 +5, 궁수 +4, 음유시인 +1)', () => {
+  // 옛 코드는 장비 합만 — 직업별 atk 차별화의 핵심이라 빈손이어도 차이가 나야.
+  const g = new Game();
+  const cases = [
+    ['novice', 0], ['warrior', 3], ['mage', 0],
+    ['thief', 5], ['archer', 4], ['healer', 0], ['bard', 1],
+  ];
+  for (const [klass, expectedBonus] of cases) {
+    const player = {
+      klass,
+      equipment: { head: null, body: null, weapon: null, offhand: null, feet: null },
+    };
+    assert.equal(g._totalAttack(player), expectedBonus, `${klass} 빈손 atk`);
+  }
+});
+
+test('_totalDefense: 직업 defBonus 가 장비 합에 더해진다 (전사 +2, 힐러 +1, 음유시인 +1)', () => {
+  const g = new Game();
+  const cases = [
+    ['novice', 0], ['warrior', 2], ['mage', 0],
+    ['thief', 0], ['archer', 0], ['healer', 1], ['bard', 1],
+  ];
+  for (const [klass, expectedBonus] of cases) {
+    const player = {
+      klass,
+      equipment: { head: null, body: null, weapon: null, offhand: null, feet: null },
+    };
+    assert.equal(g._totalDefense(player), expectedBonus, `${klass} 빈손 def`);
+  }
+});
 
 test('_addMonsterToRoom / _removeMonsterFromRoom: O(1) get/delete + 빈 Map 정리', () => {
   const g = new Game();

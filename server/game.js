@@ -78,24 +78,89 @@ const MONSTER_DEFS = {
   },
 };
 
-// 직업 정의. novice 는 갓 입장한 모든 캐릭터의 기본 직업이고, 마법사는
-// 광장에서 레벨 10 도달 시 전직할 수 있는 첫 번째 분기. 새 직업을 추가할 때는
-// (1) 여기에 엔트리를 만들고 (2) class.md 직업 매트릭스에 한 줄 추가 +
-// (3) 필요하면 changeClass 의 허용 키 목록을 확장한다.
+// 직업 정의. novice 는 갓 입장한 모든 캐릭터의 기본 직업이고, 광장에서 레벨
+// 10 도달 시 6 직업(전사/마법사/도둑/궁수/힐러/음유시인) 중 하나로 전직 가능.
+// 각 직업은 네 축으로 차별화된다 — HP 성장(hpAtLv1/hpPerLv), MP 성장
+// (mpAtLv1/mpPerLv), 기본 공격 보정(atkBonus, _totalAttack 합산), 기본 방어
+// 보정(defBonus, _totalDefense 합산). 새 직업 추가 시 (1) 여기에 엔트리,
+// (2) `Game.changeClass` 의 허용 키 매핑에 한국어/영문 alias, (3) class.md
+// 매트릭스에 행 추가, (4) 직업 고유 명령(스킬/마법) 이 있으면 디스패처에 등록.
 const CLASS_DEFS = {
   novice: {
     name: '초보자',
     desc: '아직 길을 정하지 않은 풋내기.',
-    // maxMp = mpAtLv1 + (level - 1) * mpPerLv. novice 는 마나 자원을 못 쓴다.
-    mpAtLv1: 0,
-    mpPerLv: 0,
+    // maxHp = hpAtLv1 + (level - 1) * hpPerLv — novice 가 baseline.
+    hpAtLv1: 100, hpPerLv: 10,
+    // maxMp = mpAtLv1 + (level - 1) * mpPerLv — novice 는 마나 자원을 못 쓴다.
+    mpAtLv1: 0, mpPerLv: 0,
+    // _totalAttack / _totalDefense 가 장비 합 외에 더하는 직업 패시브.
+    atkBonus: 0, defBonus: 0,
+  },
+  warrior: {
+    name: '전사',
+    desc: '근접 전투의 화신. 두꺼운 갑옷과 큰 무기에 익숙하다.',
+    // 가장 두꺼운 HP. 마법 자원은 없고, 기본 공격·방어 패시브로 차별화.
+    hpAtLv1: 130, hpPerLv: 14,
+    mpAtLv1: 0, mpPerLv: 0,
+    atkBonus: 3, defBonus: 2,
   },
   mage: {
     name: '마법사',
     desc: '광장의 마법진에서 마나의 길을 받아들인 자.',
-    mpAtLv1: 30,
-    mpPerLv: 5,
+    // 가장 약한 HP, 가장 큰 마법 데미지(SPELL_DEFS) 로 보상. 패시브 공/방 0.
+    hpAtLv1: 80, hpPerLv: 8,
+    mpAtLv1: 30, mpPerLv: 5,
+    atkBonus: 0, defBonus: 0,
   },
+  thief: {
+    name: '도둑',
+    desc: '그림자에서 단검을 쥔다. 회복할 시간을 벌지 못한다.',
+    // 종이 방어 + 가장 큰 기본 공격 패시브 — 「먼저 때리고 먼저 죽는」 빌드.
+    hpAtLv1: 90, hpPerLv: 9,
+    mpAtLv1: 0, mpPerLv: 0,
+    atkBonus: 5, defBonus: 0,
+  },
+  archer: {
+    name: '궁수',
+    desc: '거리를 두고 활을 다룬다. 빈손으로도 활시위는 늘 손에 있다.',
+    // 안정적인 HP + 큰 패시브 atk. 추후 원거리 회피·크리티컬 메커닉 후보.
+    hpAtLv1: 100, hpPerLv: 10,
+    mpAtLv1: 0, mpPerLv: 0,
+    atkBonus: 4, defBonus: 0,
+  },
+  healer: {
+    name: '힐러',
+    desc: '신성한 빛으로 동료를 회복한다. 직접 전투엔 약하다.',
+    // 가장 큰 MP 풀(미래 회복 마법 비용 큼). 공격 패시브 0, 방어 +1.
+    hpAtLv1: 95, hpPerLv: 10,
+    mpAtLv1: 35, mpPerLv: 6,
+    atkBonus: 0, defBonus: 1,
+  },
+  bard: {
+    name: '음유시인',
+    desc: '노래로 사기를 북돋우고 운명을 휘젓는다. 만능에 가깝지만 어느 한 분야의 정점은 아니다.',
+    // 모든 축에 작은 보정 — buff 메커닉이 들어오면 진짜 가치는 거기서 나오지만,
+    // 현재는 「치우치지 않은」 분기로 의미 있는 차별화.
+    hpAtLv1: 100, hpPerLv: 10,
+    mpAtLv1: 25, mpPerLv: 4,
+    atkBonus: 1, defBonus: 1,
+  },
+};
+
+// novice 외 모든 직업의 id 리스트. 광장 전직 분기에서 「전직 가능 직업: ...」
+// 안내 + changeClass 허용 매트릭스의 단일 진실원. 추가 시 이 배열·CLASS_DEFS·
+// CHANGE_CLASS_ALIASES 세 곳만 갱신.
+const PLAYABLE_CLASSES = ['warrior', 'mage', 'thief', 'archer', 'healer', 'bard'];
+
+// 「전직 <입력>」 의 입력 텍스트 → 표준 klass id. 한국어 직업명 + 영문 id 를
+// 둘 다 받아 모바일·데스크톱 사용자 모두 자연스럽게 입력하게 한다.
+const CHANGE_CLASS_ALIASES = {
+  '전사': 'warrior', 'warrior': 'warrior',
+  '마법사': 'mage', 'mage': 'mage',
+  '도둑': 'thief', 'thief': 'thief',
+  '궁수': 'archer', 'archer': 'archer',
+  '힐러': 'healer', 'healer': 'healer',
+  '음유시인': 'bard', 'bard': 'bard',
 };
 
 // 마법 정의. 클라이언트가 모르는 단일 진실원이며, 입력은 (1) 텍스트(파이어볼 …)
@@ -236,9 +301,11 @@ function levelFromExp(exp) {
   }
   return level;
 }
-function classMaxHp(/* klass */ _klass, level) {
-  // 직업에 무관한 공통 HP 성장. 미세 차이가 필요해지면 직업 정의로 빼면 된다.
-  return 100 + 10 * (level - 1);
+function classMaxHp(klass, level) {
+  // 직업별 HP 성장. CLASS_DEFS[klass].hpAtLv1 / hpPerLv 가 단일 진실원.
+  // 옛 코드는 직업 무관 공통 공식(100 + 10×(L-1)) 였다 — 6 직업 추가 후 차별화.
+  const def = CLASS_DEFS[klass] || CLASS_DEFS.novice;
+  return def.hpAtLv1 + (level - 1) * def.hpPerLv;
 }
 function classMaxMp(klass, level) {
   const def = CLASS_DEFS[klass] || CLASS_DEFS.novice;
@@ -341,11 +408,12 @@ export class Game {
     // _indexInRoom / _unindexFromRoom 헬퍼로 register/move/respawn/_finalizePlayer
     // /_addAuthenticatedPlayer 다섯 mutation 지점에서만 동기화.
     this.roomMembers = new Map();
-    // klass==='mage' 인 등록 플레이어 id 의 Set. _regenTick 의 MP 회복 분기가
-    // this.players.values() 전체 1k 순회 대신 마법사 N_mage 만 돌게 한다.
-    // 동기화 지점: registerPlayer / _addAuthenticatedPlayer (hydrate 후) /
-    // changeClass / _unindexPlayer. Set 이라 add 는 idempotent.
-    this.mages = new Set();
+    // MP 자원을 쓰는 직업(mage/healer/bard) 의 등록 플레이어 id Set. _regenTick
+    // 의 MP 회복 분기가 this.players.values() 전체 1k 순회 대신 N_mpRegen 만
+    // 돌게 한다 — 0 명만 마법 직업이어도 비용 일정. 동기화 지점: registerPlayer
+    // / _addAuthenticatedPlayer (hydrate 후) / changeClass / _unindexPlayer.
+    // Set 이라 add 는 idempotent.
+    this.mpRegen = new Set();
     // 등록된 + 생성 중(generating) 캐릭터 이름의 Set. registerPlayer 의 이름
     // 중복 검사가 옛 this.players.values() 풀 순회(1k) 대신 O(1) Set.has 로
     // 떨어지도록. 동시 가입자 N 명이 같은 이름을 시도해도 비용 일정. 동기화:
@@ -406,13 +474,15 @@ export class Game {
     this._mpRegenAccum += perTickRatio; // perTickRatio 는 초 단위 비율(1.0=1초)
     if (this._mpRegenAccum >= 3) {
       this._mpRegenAccum = 0;
-      // mages 인덱스만 순회 — novice 700 명에 대한 분기 쳐내기를 입구에서 제거.
-      // klass 필드가 떠나는 시점(_unindexPlayer)에서 Set 이 갱신돼 stale id 가
-      // 잠깐 남아도 players.get 이 null 이라 안전하게 skip.
-      for (const id of this.mages) {
+      // mpRegen 인덱스만 순회 — MP 자원 안 쓰는 직업(novice/warrior/thief/archer)
+      // 에 대한 분기 쳐내기를 입구에서 제거. klass 필드가 떠나는 시점
+      // (_unindexPlayer)에서 Set 이 갱신돼 stale id 가 잠깐 남아도 players.get
+      // 이 null 이라 안전하게 skip. 방어적 maxMp 가드도 — changeClass 회전 race
+      // 또는 maxMp=0 직업이 잘못 들어 있는 경우 보호.
+      for (const id of this.mpRegen) {
         const p = this.players.get(id);
         if (!p || !p.registered || p.disconnectedAt != null) continue;
-        if (p.klass !== 'mage') continue; // 방어적 — 회전 race 보호
+        if ((p.maxMp || 0) <= 0) continue;
         if (p.mp >= p.maxMp) continue;
         p.mp = Math.min(p.maxMp, p.mp + 1);
         this.pushStatusDelta(p, { mp: p.mp });
@@ -525,10 +595,14 @@ export class Game {
     return { hpBefore, killingBlow };
   }
 
-  // 장비 슬롯들의 총 공격/방어 합. 능력치 없는 슬롯은 0 으로 떨어져 안전.
-  // 매 공격마다 호출되지만 5개 슬롯 순회라 오버헤드 무시 수준.
+  // 장비 슬롯들의 총 공격/방어 합 + 직업 패시브 보정. 능력치 없는 슬롯은 0
+  // 으로 떨어져 안전. 매 공격마다 호출되지만 5개 슬롯 순회라 오버헤드 무시 수준.
+  // CLASS_DEFS 의 atkBonus/defBonus 는 직업 차별화의 핵심 — 전사·도둑·궁수는
+  // 빈손으로도 base + 패시브 만큼 일격이 더 무겁고, 힐러·음유시인은 약간의
+  // 방어 보정으로 후방 안전성을 가진다.
   _totalAttack(player) {
-    let a = 0;
+    const klassDef = CLASS_DEFS[player.klass] || CLASS_DEFS.novice;
+    let a = klassDef.atkBonus || 0;
     for (const k of Object.keys(player.equipment)) {
       const it = player.equipment[k];
       if (it?.attack) a += it.attack;
@@ -536,7 +610,8 @@ export class Game {
     return a;
   }
   _totalDefense(player) {
-    let d = 0;
+    const klassDef = CLASS_DEFS[player.klass] || CLASS_DEFS.novice;
+    let d = klassDef.defBonus || 0;
     for (const k of Object.keys(player.equipment)) {
       const it = player.equipment[k];
       if (it?.defense) d += it.defense;
@@ -606,9 +681,11 @@ export class Game {
           }
         }
       }
-      // 레벨 10 도달 + novice 인 경우 광장 전직 안내
+      // 레벨 10 도달 + novice 인 경우 광장 전직 안내. 6 직업 중 어느 분기로
+      // 갈지는 사용자 선택이라 라인엔 직업 목록을 보여 주고 명령 형식만 안내.
       if (before < 10 && after >= 10 && player.klass === 'novice' && player.roomId === 'square') {
-        this.send(player, { type: 'system', text: '광장의 마법진이 빛난다. `전직 마법사` 명령으로 마법사가 될 수 있다.' });
+        const opts = PLAYABLE_CLASSES.map(id => CLASS_DEFS[id].name).join(' / ');
+        this.send(player, { type: 'system', text: `광장의 마법진이 빛난다. \`전직 <직업>\` 으로 직업을 정할 수 있다. (${opts})` });
       }
     }
     this.pushStatus(player);
@@ -617,8 +694,8 @@ export class Game {
     this._persistPlayer(player);
   }
 
-  // 광장에서 레벨 10 이상의 novice 만 직업을 바꿀 수 있다. 현재는 마법사 한
-  // 갈래만 분기로 열려 있다 — 새 직업이 들어오면 허용 키 매핑을 확장.
+  // 광장에서 레벨 10 이상의 novice 가 6 직업(전사/마법사/도둑/궁수/힐러/음유시인)
+  // 중 하나로 전직. 허용 입력은 CHANGE_CLASS_ALIASES 가 단일 진실원.
   changeClass(player, raw) {
     if (player.klass !== 'novice') {
       return this.send(player, { type: 'system', text: '이미 전직했습니다.' });
@@ -630,19 +707,20 @@ export class Game {
       return this.send(player, { type: 'system', text: '전직은 광장에서만 가능합니다.' });
     }
     const arg = String(raw || '').trim().toLowerCase();
-    // 허용 키: 한국어 직업명 + 영문 id
-    const map = { '마법사': 'mage', 'mage': 'mage' };
-    const target = map[arg];
+    const target = CHANGE_CLASS_ALIASES[arg];
     if (!target) {
-      const options = Object.entries(CLASS_DEFS)
-        .filter(([id]) => id !== 'novice')
-        .map(([, def]) => def.name)
-        .join(', ');
+      const options = PLAYABLE_CLASSES.map(id => CLASS_DEFS[id].name).join(', ');
       return this.send(player, { type: 'system', text: `전직 가능한 직업: ${options}. 사용법: \`전직 마법사\`` });
     }
     player.klass = target;
-    if (target === 'mage') this.mages.add(player.id);
-    else this.mages.delete(player.id);
+    // mpRegen 인덱스 동기화 — maxMp > 0 인 직업(mage/healer/bard) 만 _regenTick
+    // 의 MP 회복 sweep 대상. 옛 mages Set 의 일반화: 「마법사 전용」이 아니라
+    // 「MP 자원을 쓰는 모든 직업」 인덱스로 의미가 확장됐다.
+    if ((CLASS_DEFS[target].mpAtLv1 || 0) > 0 || (CLASS_DEFS[target].mpPerLv || 0) > 0) {
+      this.mpRegen.add(player.id);
+    } else {
+      this.mpRegen.delete(player.id);
+    }
     player.maxHp = classMaxHp(target, player.level);
     player.maxMp = classMaxMp(target, player.level);
     player.hp = player.maxHp;
@@ -650,7 +728,9 @@ export class Game {
     const name = CLASS_DEFS[target].name;
     this.send(player, { type: 'system', text: `${name}로 전직했다. 광장의 마법진이 푸르게 타오른다.` });
     this.broadcastRoom('square', { type: 'text', text: `${player.name}님이 ${name}로 전직했다.` }, player.id);
-    // 마법사 전직 시 1레벨 마법(파이어볼)이 즉시 해금되므로 안내.
+    // 마법사 전직 시 1레벨 마법(파이어볼)이 즉시 해금되므로 안내. 다른 직업의
+    // 고유 스킬 시스템(전사 「강타」, 도둑 「독공격」 등) 은 후속 작업 — 현재는
+    // 패시브 atk/def 보너스만 차별화 요소. class.md 의 「향후 스킬 TODO」 참조.
     if (target === 'mage') {
       const firstSpell = Object.values(SPELL_DEFS).find(s => s.minLevel <= player.level);
       if (firstSpell) {
@@ -714,7 +794,7 @@ export class Game {
     if (p.sid) this.sidToPlayer.delete(p.sid);
     if (p.naverId) this.naverIdToPlayer.delete(p.naverId);
     if (p.roomId) this._unindexFromRoom(p, p.roomId);
-    this.mages.delete(p.id);
+    this.mpRegen.delete(p.id);
     // 이름 reservation 도 함께 해제 — 같은 이름의 다른 사용자가 다시 등록할
     // 수 있도록. 빈 이름(stub) 은 Set 에 들어 있지 않아 delete 가 no-op.
     if (p.name) this.playerNames.delete(p.name);
@@ -828,7 +908,12 @@ export class Game {
     player.roomId = saved.roomId && ROOMS[saved.roomId] ? saved.roomId : 'square';
     player.registered = true;
     this._indexInRoom(player, player.roomId);
-    if (player.klass === 'mage') this.mages.add(player.id);
+    // hydrate 시 직업이 mp 사용군이면 mpRegen 인덱스에 등록 — _regenTick 의 MP
+    // 회복 sweep 대상에 포함된다(mage/healer/bard).
+    const klassDef = CLASS_DEFS[player.klass] || CLASS_DEFS.novice;
+    if ((klassDef.mpAtLv1 || 0) > 0 || (klassDef.mpPerLv || 0) > 0) {
+      this.mpRegen.add(player.id);
+    }
     if (player.name) this.playerNames.add(player.name);
 
     this.send(player, { type: 'system', text: `${player.name}, 다시 만나서 반갑습니다.` });
@@ -1070,7 +1155,8 @@ export class Game {
     player.registered = true;
     player.roomId = 'square';
     this._indexInRoom(player, 'square');
-    if (player.klass === 'mage') this.mages.add(player.id);
+    // 신규 등록은 항상 novice 출발 — mpRegen 인덱스 등록 분기는 changeClass /
+    // _addAuthenticatedPlayer 양쪽에서만. 여기선 별도 add 불필요.
 
     this.send(player, { type: 'system', text: `${cleanName}, 아그리아에 오신 것을 환영합니다.` });
     this.pushStatus(player);
