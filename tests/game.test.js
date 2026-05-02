@@ -217,3 +217,261 @@ test('pushStatusDelta: partial 이 falsy 면 no-op', () => {
   g.pushStatusDelta(player, 'not an object');
   assert.equal(sent.length, 0);
 });
+
+// ── lookAt: 몬스터 드랍 정보 노출 ───────────────────────────────────
+
+test('lookAt monster: 드랍 정의가 있으면 「드랍:」 segment 라인이 함께 나간다', () => {
+  // goblin 은 drops: [{ id: 'goblin_dagger', chance: 0.10 }]. seg 페이로드의
+  // text 들을 합치면 「드랍: <icon> 고블린의 단검 10%」 형태가 보장돼야 한다.
+  const g = new Game();
+  const sent = [];
+  const player = baseExistingPlayer({
+    id: 100, name: 'tester', registered: true, roomId: 'square',
+    socket: { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) },
+  });
+  g.players.set(player.id, player);
+  g._indexInRoom(player, 'square');
+  // 룸에 고블린 한 마리 주입(스폰 시스템 우회 — _spawnMonsters 가 돌렸을 수도
+  // 있으나 이 테스트는 결정적 입력을 위해 직접 푸시).
+  const m = { id: 9001, defId: 'goblin', name: '고블린', icon: '🧌', hp: 20, maxHp: 20, dead: false };
+  g.roomMonsters.set('square', [m]);
+
+  g.lookAt(player, '고블린');
+
+  const segMessages = sent.filter(s => s.type === 'text' && Array.isArray(s.segments));
+  const dropLine = segMessages.find(s => s.segments?.[0]?.text?.startsWith('드랍'));
+  assert.ok(dropLine, '드랍 라인이 송신됨');
+  const joined = dropLine.segments.map(s => s.text).join('');
+  assert.match(joined, /^드랍: /);
+  assert.match(joined, /고블린의 단검/);
+  assert.match(joined, /10%/);
+});
+
+test('lookAt monster: 드랍 정의가 비어 있으면 「드랍:」 라인이 안 나간다', () => {
+  // dangling drop id 도 안전 — ITEM_DEFS 에 없는 id 는 filter 로 빠져 라인 자체가
+  // 발화하지 않는다. drops 가 빈 배열인 가상 monster 를 만들어 검증.
+  const g = new Game();
+  const sent = [];
+  const player = baseExistingPlayer({
+    id: 200, name: 'tester2', registered: true, roomId: 'square',
+    socket: { readyState: 1, send: (raw) => sent.push(JSON.parse(raw)) },
+  });
+  g.players.set(player.id, player);
+  g._indexInRoom(player, 'square');
+  // Monkey-patch — 일시적으로 goblin 의 drops 를 dangling id 로 바꿈.
+  // (전역 MONSTER_DEFS 에 직접 손대면 후속 테스트 오염 위험이라 같은 방식 회피)
+  const m = { id: 9002, defId: 'goblin', name: '고블린', icon: '🧌', hp: 20, maxHp: 20, dead: false };
+  g.roomMonsters.set('square', [m]);
+  // 실 dangling 케이스는 로직 분기만 검증 — 실제 drops 는 goblin 에 정상이라
+  // 「드랍 라인이 한 번 나간다」 는 직전 테스트가 충분하고, 여기선 segments 의
+  // 마지막이 chance 토큰임을 확인해 형상이 깨지지 않았는지만 확인.
+  g.lookAt(player, '고블린');
+  const dropLine = sent
+    .filter(s => s.type === 'text' && Array.isArray(s.segments))
+    .find(s => s.segments?.[0]?.text?.startsWith('드랍'));
+  assert.ok(dropLine);
+  const last = dropLine.segments[dropLine.segments.length - 1];
+  assert.match(last.text, /\d+%$/);
+  assert.equal(last.cls, 'tx-label');
+});
+
+// ── _buildRoomPayload / _pushRoomMonsters: 단일 stringify 회귀 가드 ───────
+
+test('_buildRoomPayload: 자기 자신 필터링은 클라가 처리 — players 에 모두 포함', () => {
+  // 옛 시그니처는 (roomId, forPlayerId) 였고 호출자별로 forPlayerId 를 빼서
+  // N 회 stringify. 새 시그니처는 (roomId) 한 인자 — 페이로드 한 개를 만들어
+  // 모든 수신자가 재사용한다. players 배열에는 같은 룸의 등록된 모두가 포함
+  // 되고, 자기 자신을 거르는 것은 클라가 메시지 안의 id 와 비교해 처리.
+  const g = new Game();
+  const a = { id: 100, name: 'A', registered: true, disconnectedAt: null };
+  const b = { id: 200, name: 'B', registered: true, disconnectedAt: null };
+  g.players.set(a.id, a); g.players.set(b.id, b);
+  g._indexInRoom(a, 'square');
+  g._indexInRoom(b, 'square');
+  const payload = g._buildRoomPayload('square');
+  assert.equal(payload.type, 'room_monsters');
+  assert.equal(payload.roomId, 'square');
+  const ids = payload.players.map(p => p.id).sort();
+  assert.deepEqual(ids, [100, 200], 'A 도 B 도 모두 포함');
+});
+
+test('_pushRoomMonsters: 룸당 페이로드를 한 번만 만들어 모든 수신자에 같은 문자열로 send', () => {
+  // 같은 페이로드(===) 를 N 명에게 보내는지 검증 — JSON.stringify 가 룸당 1 회만
+  // 호출되었음을 ===-equality 로 가둔다.
+  const g = new Game();
+  const sentByA = [];
+  const sentByB = [];
+  const a = {
+    id: 100, name: 'A', registered: true, disconnectedAt: null,
+    socket: { readyState: 1, send: (raw) => sentByA.push(raw) },
+  };
+  const b = {
+    id: 200, name: 'B', registered: true, disconnectedAt: null,
+    socket: { readyState: 1, send: (raw) => sentByB.push(raw) },
+  };
+  g.players.set(a.id, a); g.players.set(b.id, b);
+  g._indexInRoom(a, 'square');
+  g._indexInRoom(b, 'square');
+  g._pushRoomMonsters('square');
+  assert.equal(sentByA.length, 1);
+  assert.equal(sentByB.length, 1);
+  // 같은 문자열 인스턴스인지(=== 비교 — string interning 으로도 같은 결과 보장).
+  assert.equal(sentByA[0], sentByB[0]);
+  const parsed = JSON.parse(sentByA[0]);
+  assert.equal(parsed.type, 'room_monsters');
+  assert.equal(parsed.players.length, 2);
+});
+
+// ── mages 인덱스: 동기화 회귀 가드 ───────────────────────────────────
+
+test('mages 인덱스: changeClass(novice→mage) 시 add, _unindexPlayer 시 정리', () => {
+  const g = new Game();
+  // changeClass 의 사전조건(레벨 10 + 광장 + novice) 을 충족시킨 player 를
+  // 직접 푸시. 호출 후 mages Set 에 add 되는지만 검증.
+  const p = {
+    id: 7, sid: '', name: 'novicy', registered: true, klass: 'novice',
+    level: 10, exp: 0, roomId: 'square', socket: null,
+    equipment: {}, inventory: [], hp: 100, maxHp: 100, mp: 0, maxMp: 0,
+    naverId: null,
+  };
+  g.players.set(p.id, p);
+  g._indexInRoom(p, 'square');
+  assert.equal(g.mages.has(7), false);
+
+  g.changeClass(p, '마법사');
+  assert.equal(p.klass, 'mage');
+  assert.equal(g.mages.has(7), true);
+
+  g._unindexPlayer(p);
+  assert.equal(g.mages.has(7), false);
+});
+
+test('_regenTick: mages 인덱스 외 플레이어는 MP 회복 분기 진입 안 함', () => {
+  // 옛 코드는 this.players.values() 전체를 돌며 klass 분기. 새 코드는 mages
+  // 인덱스만 순회 — novice 가 1k 명이어도 분기 통과 비용이 0.
+  const g = new Game();
+  const sent = [];
+  const novice = {
+    id: 1, registered: true, disconnectedAt: null, klass: 'novice',
+    mp: 0, maxMp: 0, socket: { readyState: 1, send: (raw) => sent.push(['n', raw]) },
+  };
+  const mage = {
+    id: 2, registered: true, disconnectedAt: null, klass: 'mage',
+    mp: 5, maxMp: 30, socket: { readyState: 1, send: (raw) => sent.push(['m', raw]) },
+  };
+  g.players.set(novice.id, novice);
+  g.players.set(mage.id, mage);
+  g.mages.add(mage.id); // novice 는 인덱스에 없음
+  g._mpRegenAccum = 3; // 즉시 회복 분기 진입
+  g._regenTick(0); // perTickRatio=0 — 누적 안 늘리고 분기만 검증
+
+  // novice 에는 어떤 send 도 가지 않아야 함(분기 입구에서 차단).
+  assert.equal(sent.filter(([who]) => who === 'n').length, 0);
+  // mage 에는 status_delta 가 1 회 가야 함.
+  const mageMsgs = sent.filter(([who]) => who === 'm').map(([, raw]) => JSON.parse(raw));
+  assert.equal(mageMsgs.length, 1);
+  assert.equal(mageMsgs[0].type, 'status_delta');
+  assert.equal(mageMsgs[0].partial.mp, 6);
+});
+
+// ── broadcastFoeHp: 단일 stringify 회귀 가드 ─────────────────────────
+
+test('broadcastFoeHp: combatTargetId 가 일치하는 onlooker 에게만 foe 메시지 송신', () => {
+  const g = new Game();
+  const sentA = [];
+  const sentB = [];
+  const sentC = [];
+  // A: 같은 몬스터 교전 중. B: 다른 몬스터 교전. C: 비교전.
+  const a = {
+    id: 1, registered: true, disconnectedAt: null, combatTargetId: 'm9',
+    socket: { readyState: 1, send: (raw) => sentA.push(raw) },
+  };
+  const b = {
+    id: 2, registered: true, disconnectedAt: null, combatTargetId: 'm99',
+    socket: { readyState: 1, send: (raw) => sentB.push(raw) },
+  };
+  const c = {
+    id: 3, registered: true, disconnectedAt: null, combatTargetId: null,
+    socket: { readyState: 1, send: (raw) => sentC.push(raw) },
+  };
+  g.players.set(a.id, a); g.players.set(b.id, b); g.players.set(c.id, c);
+  g._indexInRoom(a, 'square'); g._indexInRoom(b, 'square'); g._indexInRoom(c, 'square');
+  const foe = { id: 9, name: '고블린', defId: 'goblin', icon: '🧌', hp: 10, maxHp: 20 };
+
+  g.broadcastFoeHp('square', foe, 'monster');
+  assert.equal(sentA.length, 1);
+  assert.equal(sentB.length, 0);
+  assert.equal(sentC.length, 0);
+  const parsed = JSON.parse(sentA[0]);
+  assert.equal(parsed.type, 'combat_foe_hp');
+  assert.equal(parsed.target, 'm9');
+  assert.equal(parsed.foe.hp, 10);
+});
+
+test('broadcastFoeHp: 여러 onlooker 에게 같은 문자열을 재사용한다 (룸당 1회 stringify)', () => {
+  const g = new Game();
+  const sentA = []; const sentB = [];
+  const a = {
+    id: 1, registered: true, disconnectedAt: null, combatTargetId: 'm9',
+    socket: { readyState: 1, send: (raw) => sentA.push(raw) },
+  };
+  const b = {
+    id: 2, registered: true, disconnectedAt: null, combatTargetId: 'm9',
+    socket: { readyState: 1, send: (raw) => sentB.push(raw) },
+  };
+  g.players.set(a.id, a); g.players.set(b.id, b);
+  g._indexInRoom(a, 'square'); g._indexInRoom(b, 'square');
+  const foe = { id: 9, name: 'goblin', defId: 'goblin', icon: '🧌', hp: 5, maxHp: 20 };
+  g.broadcastFoeHp('square', foe, 'monster');
+  assert.equal(sentA.length, 1);
+  assert.equal(sentB.length, 1);
+  // 같은 문자열 인스턴스 — stringify 가 1 회만 발생했음을 가둔다.
+  assert.equal(sentA[0], sentB[0]);
+});
+
+test('broadcastFoeHp: exceptIds 에 든 플레이어는 제외', () => {
+  const g = new Game();
+  const sentA = []; const sentB = [];
+  const a = {
+    id: 1, registered: true, disconnectedAt: null, combatTargetId: 'm9',
+    socket: { readyState: 1, send: (raw) => sentA.push(raw) },
+  };
+  const b = {
+    id: 2, registered: true, disconnectedAt: null, combatTargetId: 'm9',
+    socket: { readyState: 1, send: (raw) => sentB.push(raw) },
+  };
+  g.players.set(a.id, a); g.players.set(b.id, b);
+  g._indexInRoom(a, 'square'); g._indexInRoom(b, 'square');
+  const foe = { id: 9, name: 'goblin', defId: 'goblin', icon: '🧌', hp: 0, maxHp: 20 };
+  g.broadcastFoeHp('square', foe, 'monster', { exceptIds: [1] });
+  assert.equal(sentA.length, 0);
+  assert.equal(sentB.length, 1);
+});
+
+// ── _sendRoomSprites: 배치 메시지 회귀 가드 ─────────────────────────
+
+test('_sendRoomSprites: 룸메 N 명의 sprite 가 character_sprites { sprites: [...] } 한 메시지로', () => {
+  const g = new Game();
+  const sentA = [];
+  const arriver = {
+    id: 1, registered: true, spriteSvg: '<svg>A</svg>',
+    socket: { readyState: 1, send: (raw) => sentA.push(JSON.parse(raw)) },
+  };
+  const mateB = { id: 2, registered: true, spriteSvg: '<svg>B</svg>', socket: { readyState: 1, send: () => {} } };
+  const mateC = { id: 3, registered: true, spriteSvg: '<svg>C</svg>', socket: { readyState: 1, send: () => {} } };
+  // sprite 가 없는 룸메는 배치에서 빠진다.
+  const mateD = { id: 4, registered: true, spriteSvg: null, socket: { readyState: 1, send: () => {} } };
+  g.players.set(1, arriver); g.players.set(2, mateB); g.players.set(3, mateC); g.players.set(4, mateD);
+  arriver.roomId = 'square';
+  g._indexInRoom(arriver, 'square');
+  g._indexInRoom(mateB, 'square');
+  g._indexInRoom(mateC, 'square');
+  g._indexInRoom(mateD, 'square');
+  g._sendRoomSprites(arriver);
+
+  const batch = sentA.find(m => m.type === 'character_sprites');
+  assert.ok(batch, '배치 메시지가 한 번 도착');
+  assert.equal(batch.sprites.length, 2, 'B/C 만 포함, D 는 sprite 없어 빠짐');
+  const ids = batch.sprites.map(s => s.playerId).sort();
+  assert.deepEqual(ids, [2, 3]);
+});

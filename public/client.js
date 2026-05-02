@@ -259,6 +259,7 @@ function handleMessage(msg) {
     case 'status_delta': applyStatusDelta(msg.partial); break;
     case 'view':    renderObjectView(msg.view); break;
     case 'combat':  renderCombat(msg.combat); break;
+    case 'combat_foe_hp': applyCombatFoeHp(msg); break;
     case 'room_monsters': renderRoomMonsters(msg); break;
     case 'welcome': showWelcome(); break;
     case 'register_progress': showRegisterProgress(msg.text || '캐릭터를 그리는 중입니다…'); break;
@@ -266,6 +267,18 @@ function handleMessage(msg) {
     case 'character_sprite':
       if (msg.svg && typeof msg.playerId === 'number') {
         PLAYER_SPRITES.set(msg.playerId, msg.svg);
+      }
+      break;
+    case 'character_sprites':
+      // 룸 입장 시 룸메 N 명의 스프라이트를 한 메시지로 묶어 받는 배치 형태.
+      // 옛 character_sprite × N 송신을 1 회로 압축한 결과. PLAYER_SPRITES 캐시
+      // 형상은 동일 — 개별 메시지가 들어오는 케이스(예: 새 입장자 알림) 와 공존.
+      if (Array.isArray(msg.sprites)) {
+        for (const s of msg.sprites) {
+          if (s?.svg && typeof s.playerId === 'number') {
+            PLAYER_SPRITES.set(s.playerId, s.svg);
+          }
+        }
       }
       break;
     case 'server_info': handleServerInfo(msg.version); break;
@@ -638,14 +651,43 @@ function renderCombat(combat) {
   }
 }
 
+// 관전자(같은 몬스터 교전 중인 다른 플레이어) 에게 가는 「foe HP 만 변동」 시그널.
+// 서버는 이 메시지를 룸당 한 번 stringify 후 socket.send 가 같은 문자열을
+// 재사용한다(옛 풀 pushCombat × N 직렬화 대신). 자기 status(name/hp/mp 등) 는
+// 클라 캐시(lastStatus) 에서 읽어 합성 — recipient 별로 다르던 player 페이로드를
+// 서버가 만들 필요가 없어진다. inCombat 이거나 lastStatus 가 비었으면 stale 판정.
+function applyCombatFoeHp(msg) {
+  if (!inCombat || !lastStatus) return;
+  if (!msg || !msg.foe) return;
+  const me = {
+    id: myPlayerId,
+    name: lastStatus.name || '',
+    icon: '🧙',
+    hp: lastStatus.hp ?? 0,
+    maxHp: lastStatus.maxHp ?? 0,
+    mp: lastStatus.mp ?? 0,
+    maxMp: lastStatus.maxMp ?? 0,
+  };
+  renderCombat({
+    player: me,
+    foe: msg.foe,
+    fallen: msg.fallen || null,
+    killerName: msg.killerName || null,
+    effect: msg.effect || null,
+  });
+}
+
 // 액션 패드 타깃 소스. 서버 `room_monsters`는 monsters/objects/players 세
 // 리스트를 함께 싣고 들어온다 — 모바일 액션 패드 서브메뉴에 그대로 채운다.
 function renderRoomMonsters(msg) {
   const monsters = msg?.monsters || [];
+  // players 자기 자신 필터링은 클라가 — 서버는 룸당 한 페이로드만 stringify
+  // 후 모두에게 재사용한다(N 명 룸이면 옛 N 회 직렬화 → 1 회).
+  const players = (msg?.players || []).filter(p => p.id !== myPlayerId);
   currentRoomTargets = {
     monsters: monsters.map(m => ({ id: m.id, name: m.name })),
     objects: msg?.objects || [],
-    players: msg?.players || [],
+    players,
   };
   renderActionPad();
 }
@@ -1066,6 +1108,10 @@ function setBar(fillEl, numEl, cur, max) {
 function renderStatus(status) {
   if (!status) return;
   lastStatus = status;
+  // 자기 자신 식별자 캡처 — 첫 status 도착 시 1 회 잡으면 충분. 서버는 접속
+  // 사이 player.id 를 재발급하지 않으므로 status_delta 가 이걸 다시 보내지
+  // 않아도 안전. room_monsters 의 players 자기 자신 필터에 사용.
+  if (typeof status.id === 'number') myPlayerId = status.id;
   statusName.textContent = status.name;
 
   // 캐릭터 스탯 블록. 서버가 hp/mp/level/exp/klassName 을 권위로 보낸다.
@@ -1100,9 +1146,20 @@ function renderStatus(status) {
   // 액션 패드가 떠 있는 동안 새 마법이 해금되거나 mp 가 변하면 즉시 반영.
   if (typeof renderActionPad === 'function') renderActionPad();
 
+  renderEquipment(status.equipment);
+
+  if (status.roomId) updateMapPlayer(status.roomId);
+
+  renderInventory(status.inventory);
+}
+
+// 장비 슬롯 렌더링을 별도 함수로 — 풀 status 수신 시와 status_delta 의
+// equipment 만 변동한 경우(equip/unequip) 양쪽이 같은 코드를 공유. innerHTML
+// 전체 비우기 + createElement 루프는 슬롯 5 개라 비용 작다.
+function renderEquipment(equipment) {
   equipmentEl.innerHTML = '';
   for (const [slot, label] of EQUIP_SLOTS) {
-    const item = status.equipment?.[slot];
+    const item = equipment?.[slot];
     const li = document.createElement('li');
     if (item) {
       // 능력치는 이름 옆에 같이 붙여 한 줄에 다 보이게 — 별도 컬럼을 두면
@@ -1120,32 +1177,32 @@ function renderStatus(status) {
     }
     equipmentEl.appendChild(li);
   }
+}
 
-  if (status.roomId) updateMapPlayer(status.roomId);
-
+function renderInventory(items) {
   inventoryEl.innerHTML = '';
-  const items = status.inventory || [];
-  if (items.length === 0) {
+  const list = items || [];
+  if (list.length === 0) {
     const li = document.createElement('li');
     li.className = 'empty';
     li.textContent = '— 비어 있음 —';
     inventoryEl.appendChild(li);
-  } else {
-    for (const it of items) {
-      const li = document.createElement('li');
-      li.innerHTML = `<span class="icon"></span><span class="name"></span><span class="qty"></span>`;
-      li.querySelector('.icon').textContent = it.icon || '·';
-      // 장비는 능력치를 이름 옆에, 소비/잡템은 수량을 우측에. 한 줄 그리드를
-      // 보존하면서도 무엇을 보고 있는지 즉시 파악되게.
-      li.querySelector('.name').textContent = `${it.name}${formatItemStat(it, ' ')}`;
-      li.querySelector('.qty').textContent = it.kind === 'equip'
-        ? (it.qty > 1 ? `×${it.qty}` : '')
-        : (it.qty > 1 ? `×${it.qty}` : '');
-      if (it.id) li.dataset.itemId = it.id;
-      if (it.kind) li.dataset.kind = it.kind;
-      li.title = it.kind === 'equip' ? '클릭해서 장착' : '클릭해서 사용';
-      inventoryEl.appendChild(li);
-    }
+    return;
+  }
+  for (const it of list) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="icon"></span><span class="name"></span><span class="qty"></span>`;
+    li.querySelector('.icon').textContent = it.icon || '·';
+    // 장비는 능력치를 이름 옆에, 소비/잡템은 수량을 우측에. 한 줄 그리드를
+    // 보존하면서도 무엇을 보고 있는지 즉시 파악되게.
+    li.querySelector('.name').textContent = `${it.name}${formatItemStat(it, ' ')}`;
+    li.querySelector('.qty').textContent = it.kind === 'equip'
+      ? (it.qty > 1 ? `×${it.qty}` : '')
+      : (it.qty > 1 ? `×${it.qty}` : '');
+    if (it.id) li.dataset.itemId = it.id;
+    if (it.kind) li.dataset.kind = it.kind;
+    li.title = it.kind === 'equip' ? '클릭해서 장착' : '클릭해서 사용';
+    inventoryEl.appendChild(li);
   }
 }
 
@@ -1173,6 +1230,17 @@ function applyStatusDelta(partial) {
       statExpRow.hidden = false;
       setBar(statExpFill, statExpNum, lastStatus.exp ?? 0, lastStatus.expNext ?? 0);
     }
+  }
+  // inventory/equipment partial — equip/unequip/useItem 사이클이 풀 pushStatus
+  // 대신 변동 영역만 보낼 때 사이드바를 그쪽 row 만 다시 그린다. 둘 중 하나만
+  // 와도 그 쪽만 재구성. equipment 가 가벼운 슬롯 5 개라 풀 재구성이 곧 「변동」.
+  if (partial.equipment != null) renderEquipment(lastStatus.equipment);
+  if (partial.inventory != null) renderInventory(lastStatus.inventory);
+  // 이동 시점의 roomId 변동은 미니맵을 따라 갱신.
+  if (partial.roomId != null) updateMapPlayer(lastStatus.roomId);
+  // 광장 진입/이탈 시 전직 안내 배지를 토글.
+  if (partial.canChangeClass != null && statClassHint) {
+    statClassHint.hidden = !lastStatus.canChangeClass;
   }
 }
 

@@ -71,7 +71,18 @@ const server = http.createServer(app);
 // maxPayload caps a single client→server frame. Larger frames cause `ws` to
 // emit an error and close the socket — DoS via 100 MiB `say` is killed at the
 // wire level before any game logic runs.
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: WS_MAX_PAYLOAD });
+//
+// perMessageDeflate=false: ws 라이브러리 기본값(true) 은 짧은 JSON(20~600B)
+// 페이로드에서 「대역 절감 < CPU/메모리 비용」 영역이고, 1k 동시 연결 시
+// deflate 컨텍스트 메모리(연결당 수십 KB) 누적이 큰 부담이 된다. 큰 페이로드
+// (예: character_sprite SVG, ~수 KB) 는 자체 stringify 가 cache hit + 룸당 1 회만
+// 일어나 압축 ROI 가 낮다.
+const wss = new WebSocketServer({
+  server,
+  path: '/ws',
+  maxPayload: WS_MAX_PAYLOAD,
+  perMessageDeflate: false,
+});
 const game = new Game();
 
 // Per-IP sliding-window connection counter. Trades exact precision for memory:

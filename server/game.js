@@ -320,6 +320,11 @@ export class Game {
     // _indexInRoom / _unindexFromRoom 헬퍼로 register/move/respawn/_finalizePlayer
     // /_addAuthenticatedPlayer 다섯 mutation 지점에서만 동기화.
     this.roomMembers = new Map();
+    // klass==='mage' 인 등록 플레이어 id 의 Set. _regenTick 의 MP 회복 분기가
+    // this.players.values() 전체 1k 순회 대신 마법사 N_mage 만 돌게 한다.
+    // 동기화 지점: registerPlayer / _addAuthenticatedPlayer (hydrate 후) /
+    // changeClass / _unindexPlayer. Set 이라 add 는 idempotent.
+    this.mages = new Set();
     this.roomMonsters = new Map();
     this._spawnMonsters();
     this._startRegenTick();
@@ -369,9 +374,13 @@ export class Game {
     this._mpRegenAccum += perTickRatio; // perTickRatio 는 초 단위 비율(1.0=1초)
     if (this._mpRegenAccum >= 3) {
       this._mpRegenAccum = 0;
-      for (const p of this.players.values()) {
-        if (!p.registered || p.disconnectedAt != null) continue;
-        if (p.klass !== 'mage') continue;
+      // mages 인덱스만 순회 — novice 700 명에 대한 분기 쳐내기를 입구에서 제거.
+      // klass 필드가 떠나는 시점(_unindexPlayer)에서 Set 이 갱신돼 stale id 가
+      // 잠깐 남아도 players.get 이 null 이라 안전하게 skip.
+      for (const id of this.mages) {
+        const p = this.players.get(id);
+        if (!p || !p.registered || p.disconnectedAt != null) continue;
+        if (p.klass !== 'mage') continue; // 방어적 — 회전 race 보호
         if (p.mp >= p.maxMp) continue;
         p.mp = Math.min(p.maxMp, p.mp + 1);
         this.pushStatusDelta(p, { mp: p.mp });
@@ -382,9 +391,10 @@ export class Game {
   // 같은 방의 모든 플레이어(교전·비교전 무관)에게 현재 룸 스냅샷을 보낸다.
   // monsters는 HP 바 갱신용, objects/players는 모바일 액션 패드의 대상 선택
   // 서브메뉴 채우기용. dead 플래그가 선 항목은 splice 예정이라 제외해 패널이
-  // 깜빡이지 않도록 하고, players는 수신자별로 self를 제외해 자기 자신을
-  // "봐" 대상에서 제외한다.
-  _buildRoomPayload(roomId, forPlayerId) {
+  // 깜빡이지 않도록 하고, players 는 「자기 자신 제외」 의미를 클라로 옮긴다 —
+  // 페이로드는 수신자 모두 동일하게 만들 수 있어 한 번만 stringify 후 socket.send
+  // 가 같은 문자열을 재사용한다(룸당 N 명이면 옛 N 회 직렬화 → 1 회).
+  _buildRoomPayload(roomId) {
     const list = this.roomMonsters.get(roomId) || [];
     const monsters = [];
     for (const m of list) {
@@ -400,17 +410,25 @@ export class Game {
       .filter(o => o.name);
     const players = [];
     for (const o of this._roomPlayers(roomId)) {
-      if (o.id === forPlayerId) continue;
       if (!o.registered || o.disconnectedAt != null) continue;
       players.push({ id: o.id, name: o.name });
     }
+    // selfId 는 수신자가 자기 자신을 「봐」 타깃에서 거를 수 있게 — 클라이언트가
+    // renderRoomMonsters 에서 players 배열을 selfId 로 필터한다. 서버는 한 메시지
+    // 만 만들기 때문에 이 필드는 클라가 메시지를 받을 때 자기 id 와 비교만 하면 됨.
     return { type: 'room_monsters', roomId, monsters, objects, players };
   }
 
   _pushRoomMonsters(roomId) {
+    // 페이로드를 룸당 한 번만 만들고 stringify 한 결과를 모든 수신자에게 재사용.
+    // broadcastRoom 패턴과 동일 — selfId 는 클라이언트가 자기 자신을 알기 때문에
+    // 메시지에 박지 않아도 된다(필터는 클라가 receivePlayerSelfId 로 처리).
+    let payload = null;
     for (const p of this._roomPlayers(roomId)) {
       if (!p.registered || p.disconnectedAt != null) continue;
-      this.send(p, this._buildRoomPayload(roomId, p.id));
+      if (!p.socket || p.socket.readyState !== 1) continue;
+      if (payload === null) payload = JSON.stringify(this._buildRoomPayload(roomId));
+      p.socket.send(payload);
     }
   }
 
@@ -573,6 +591,8 @@ export class Game {
       return this.send(player, { type: 'system', text: `전직 가능한 직업: ${options}. 사용법: \`전직 마법사\`` });
     }
     player.klass = target;
+    if (target === 'mage') this.mages.add(player.id);
+    else this.mages.delete(player.id);
     player.maxHp = classMaxHp(target, player.level);
     player.maxMp = classMaxMp(target, player.level);
     player.hp = player.maxHp;
@@ -644,6 +664,7 @@ export class Game {
     if (p.sid) this.sidToPlayer.delete(p.sid);
     if (p.naverId) this.naverIdToPlayer.delete(p.naverId);
     if (p.roomId) this._unindexFromRoom(p, p.roomId);
+    this.mages.delete(p.id);
   }
 
   // 룸 멤버 인덱스 갱신 — register/move/respawn/_addAuthenticatedPlayer/_finalizePlayer
@@ -754,6 +775,7 @@ export class Game {
     player.roomId = saved.roomId && ROOMS[saved.roomId] ? saved.roomId : 'square';
     player.registered = true;
     this._indexInRoom(player, player.roomId);
+    if (player.klass === 'mage') this.mages.add(player.id);
 
     this.send(player, { type: 'system', text: `${player.name}, 다시 만나서 반갑습니다.` });
     this.pushStatus(player);
@@ -991,6 +1013,7 @@ export class Game {
     player.registered = true;
     player.roomId = 'square';
     this._indexInRoom(player, 'square');
+    if (player.klass === 'mage') this.mages.add(player.id);
 
     this.send(player, { type: 'system', text: `${cleanName}, 아그리아에 오신 것을 환영합니다.` });
     this.pushStatus(player);
@@ -1150,8 +1173,9 @@ export class Game {
     this.send(player, { type: 'text', text: `출구: ${exits}` });
     this.send(player, { type: 'view', view: null });
     // 대기화면 룸 스냅샷을 즉시 채운다. 이전 방의 잔존 항목이 있어도 새 룸
-    // 스냅샷(빈 배열일 수 있음)으로 덮어써 깨끗하게 갱신.
-    this.send(player, this._buildRoomPayload(room.id, player.id));
+    // 스냅샷(빈 배열일 수 있음)으로 덮어써 깨끗하게 갱신. 클라가 자기 자신을
+    // players 배열에서 거른다(selfId 와 비교) — 서버는 단일 페이로드 형상 유지.
+    this.send(player, this._buildRoomPayload(room.id));
   }
 
   // Resolution order: self-shortcuts → room objects → monsters → players in
@@ -1192,6 +1216,21 @@ export class Game {
         { text: monster.name, cls: 'monster-name' },
         { text: ` — 체력: ${monster.hp}/${monster.maxHp}` },
       ]);
+      // 드랍 정보 — equipment.md 의 드랍 매트릭스를 인게임에서 즉시 확인할 수 있게.
+      // 각 drop 은 독립 베르누이 시행이라 chance 는 처치당 확률 그 자체. 정의에
+      // 없는 id 는 skip(equipment 설계 변경 중 일시 dangling 이 들어와도 안전).
+      const drops = (def?.drops || []).filter(d => ITEM_DEFS[d.id]);
+      if (drops.length > 0) {
+        const segs = [{ text: '드랍: ', cls: 'tx-label' }];
+        drops.forEach((d, i) => {
+          const it = ITEM_DEFS[d.id];
+          if (i > 0) segs.push({ text: ' · ', cls: 'tx-label' });
+          if (it.icon) segs.push({ text: `${it.icon} ` });
+          segs.push({ text: it.name, cls: 'tx-item' });
+          segs.push({ text: ` ${Math.round(d.chance * 100)}%`, cls: 'tx-label' });
+        });
+        this.seg(player, segs);
+      }
       this.send(player, { type: 'view', view: null });
       return;
     }
@@ -1305,7 +1344,12 @@ export class Game {
       clearTimeout(player.pendingAttack.timer);
       player.pendingAttack = null;
     }
-    this.pushStatus(player);
+    // 이동은 inventory/equipment/level/maxHp/maxMp/spells 가 변하지 않는다.
+    // roomId/canChangeClass 만 partial 로 — 인벤·장비 DOM 풀 재구성을 회피.
+    this.pushStatusDelta(player, {
+      roomId: player.roomId,
+      canChangeClass: player.klass === 'novice' && player.level >= 10 && player.roomId === 'square',
+    });
     this.describeRoom(player);
     this._sendRoomSprites(player);
     // Refresh both rooms' player rosters so other clients' action-pad targets
@@ -1321,20 +1365,32 @@ export class Game {
   // Also push the arriver's sprite to those roommates so they see this
   // player in combat. Self-cache is handled by registerPlayer (which sends
   // own sprite directly to the player) since this method skips the arriver.
+  //
+  // 룸메 → arriver 방향은 한 메시지(`character_sprites { sprites: [...] }`) 로
+  // 묶어 send 1 회. 룸 20 명일 때 옛 19 회 send → 1 회. arriver → 룸메 방향은
+  // 룸당 한 번 stringify 후 socket.send 가 같은 문자열을 N 회 재사용 — 옛
+  // this.send 가 매번 stringify 하던 비용 제거.
   _sendRoomSprites(arriver) {
     if (!arriver.registered) return;
     // Send arriver's sprite to room mates (so they see this player in combat).
     if (arriver.spriteSvg) {
       const myMsg = { type: 'character_sprite', playerId: arriver.id, svg: arriver.spriteSvg };
+      let payload = null;
       for (const p of this._roomPlayers(arriver.roomId)) {
         if (p.id === arriver.id || !p.registered) continue;
-        this.send(p, myMsg);
+        if (!p.socket || p.socket.readyState !== 1) continue;
+        if (payload === null) payload = JSON.stringify(myMsg);
+        p.socket.send(payload);
       }
     }
-    // Send room mates' sprites to the arriver.
+    // Send room mates' sprites to the arriver — batched to a single message.
+    const sprites = [];
     for (const p of this._roomPlayers(arriver.roomId)) {
       if (p.id === arriver.id || !p.registered || !p.spriteSvg) continue;
-      this.send(arriver, { type: 'character_sprite', playerId: p.id, svg: p.spriteSvg });
+      sprites.push({ playerId: p.id, svg: p.spriteSvg });
+    }
+    if (sprites.length > 0) {
+      this.send(arriver, { type: 'character_sprites', sprites });
     }
   }
 
@@ -1366,7 +1422,12 @@ export class Game {
     item.qty -= 1;
     if (item.qty <= 0) player.inventory.splice(idx, 1);
     this.send(player, { type: 'text', text: msg });
-    this.pushStatus(player);
+    // 사용은 inventory 와 hp/mp 만 변동(체력/마나 회복 포션). equipment/level/spells 는 그대로.
+    this.pushStatusDelta(player, {
+      inventory: player.inventory,
+      hp: player.hp,
+      mp: player.mp,
+    });
     // 교전 중에 회복 아이템을 쓰면 player.hp만 바뀌고 클라의 combat 패널은
     // 다음 공격 틱까지 옛 HP로 남는다. 현재 교전 상대를 다시 찾아 즉시
     // pushCombat으로 갱신해 회복이 실시간으로 보이도록.
@@ -1415,7 +1476,11 @@ export class Game {
     player.equipment[slot] = makeItem(src.id);
     if (previous) this._addToInventory(player, previous);
     this.send(player, { type: 'text', text: `${src.name}을(를) 장착했다.` });
-    this.pushStatus(player);
+    // 장착은 inventory/equipment 만 변동. 나머지 status 필드는 클라 캐시 유지.
+    this.pushStatusDelta(player, {
+      inventory: player.inventory,
+      equipment: player.equipment,
+    });
     this._persistPlayer(player);
   }
 
@@ -1449,7 +1514,11 @@ export class Game {
     player.equipment[slot] = null;
     this._addToInventory(player, item);
     this.send(player, { type: 'text', text: `${item.name}을(를) 해제했다.` });
-    this.pushStatus(player);
+    // 해제는 inventory/equipment 만 변동.
+    this.pushStatusDelta(player, {
+      inventory: player.inventory,
+      equipment: player.equipment,
+    });
     this._persistPlayer(player);
   }
 
@@ -1501,10 +1570,22 @@ export class Game {
       // Player: exact name or numeric id only. Substring matching dropped —
       // it let `attack 자` resolve to any 여행자N at random. Disconnected
       // players in grace remain valid targets.
-      const other = [...this._roomPlayers(player.roomId)].find(p =>
-        p.id !== player.id && !p.downed &&
-        (p.name === arg || String(p.id) === arg)
-      );
+      //
+      // numeric id 분기는 this.players.get 으로 O(1) 단축 — 룸 멤버십은 별도
+      // 검증. name 분기만 룸 순회로 떨어진다.
+      const numericArg = /^\d+$/.test(arg) ? Number(arg) : null;
+      let other = null;
+      if (numericArg != null) {
+        const candidate = this.players.get(numericArg);
+        if (candidate && candidate.id !== player.id && !candidate.downed && candidate.roomId === player.roomId) {
+          other = candidate;
+        }
+      } else {
+        for (const p of this._roomPlayers(player.roomId)) {
+          if (p.id === player.id || p.downed) continue;
+          if (p.name === arg) { other = p; break; }
+        }
+      }
       if (other) return this._attackPlayer(player, other);
 
       this.send(player, { type: 'system', text: `'${arg}'을(를) 찾을 수 없습니다.` });
@@ -1550,6 +1631,11 @@ export class Game {
     // same monster, so they see the bar drain in real time. On a killing blow
     // we also flag the killer as a kill-stealer if any of these onlookers were
     // engaged with this same monster — they are the victims of the steal.
+    //
+    // 옛 코드: onlooker 마다 풀 pushCombat 페이로드를 N 회 stringify.
+    // 새 코드: 텍스트 라인은 onlooker 별로 다르므로 그대로 개별 송신, 하지만
+    // 「foe HP 갱신」 만 broadcastFoeHp 로 한 번 stringify 후 재사용. killSteal
+    // 첫 victim 식별을 위해 onlooker 1 회 순회는 유지.
     const engagementKey = `m${target.id}`;
     let killStealVictimName = null;
     let killStealVictimId = null;
@@ -1575,10 +1661,16 @@ export class Game {
           killStealVictimName = p.name;
           killStealVictimId = p.id;
         }
+        p.combatTargetId = null;
       }
-      this.pushCombat(p, target, 'monster', killingBlow ? 'foe' : null, killingBlow ? player.name : null);
-      if (killingBlow) p.combatTargetId = null;
     }
+    // 단일 stringify broadcast — onlooker 의 자기 status 는 변동 없으니 풀 combat
+    // 페이로드 대신 foe 시그널만. 클라가 자기 combatTargetId 와 비교해 patch.
+    this.broadcastFoeHp(player.roomId, target, 'monster', {
+      fallen: killingBlow ? 'foe' : null,
+      killerName: killingBlow ? player.name : null,
+      exceptIds: [player.id],
+    });
 
     if (killingBlow) {
       const roomId = player.roomId;
@@ -1770,6 +1862,9 @@ export class Game {
     ]);
 
     // 같은 몬스터 교전 중인 다른 플레이어들도 본다 — _attackMonster 패턴과 동일.
+    // 텍스트 라인은 onlooker 별로 다르므로 개별 송신, foe HP 갱신은 broadcastFoeHp
+    // 한 번 stringify 후 재사용. spellEffect 도 같은 시그널에 실어 마법 시각효과가
+    // onlooker 패널에서도 발화한다.
     const engagementKey = `m${target.id}`;
     let killStealVictimName = null;
     let killStealVictimId = null;
@@ -1795,10 +1890,15 @@ export class Game {
           killStealVictimName = p.name;
           killStealVictimId = p.id;
         }
+        p.combatTargetId = null;
       }
-      this.pushCombat(p, target, 'monster', killingBlow ? 'foe' : null, killingBlow ? player.name : null, spellEffect);
-      if (killingBlow) p.combatTargetId = null;
     }
+    this.broadcastFoeHp(player.roomId, target, 'monster', {
+      fallen: killingBlow ? 'foe' : null,
+      killerName: killingBlow ? player.name : null,
+      effect: spellEffect,
+      exceptIds: [player.id],
+    });
 
     if (killingBlow) {
       const roomId = player.roomId;
@@ -1843,7 +1943,9 @@ export class Game {
       return;
     }
     this.pushCombat(player, target, 'monster', null, null, spellEffect);
-    this.pushStatus(player);
+    // 시전 사이클이 끝난 시점엔 mp(차감) 와 hp(반격) 만 변동. inventory/equipment/
+    // level/maxHp/maxMp/spells 는 같음 — partial 로 보내 사이드바 풀 재구성 회피.
+    this.pushStatusDelta(player, { hp: player.hp, mp: player.mp });
     this._pushRoomMonsters(player.roomId);
   }
 
@@ -2025,6 +2127,11 @@ export class Game {
     this.send(player, {
       type: 'status',
       status: {
+        // 클라가 자기 자신을 식별하는 단일 진실원. room_monsters 의 players
+        // 배열에서 자기 자신을 거를 때, character_sprites 캐시 키 등에 사용.
+        // 서버는 이 id 를 player.id 로 영구 발급(접속 사이 재발급 안 됨)이라
+        // 클라가 한 번만 잡으면 그 다음 status_delta 들은 건드릴 필요 없다.
+        id: player.id,
         name: player.name,
         roomId: player.roomId,
         equipment: player.equipment,
@@ -2086,5 +2193,37 @@ export class Game {
 
   clearCombat(player) {
     this.send(player, { type: 'combat', combat: null });
+  }
+
+  // 같은 룸에서 같은 몬스터를 교전 중인 「관전자」 들에게 foe HP 만 갱신하는
+  // broadcastable 시그널. 옛 코드는 onlooker 마다 풀 pushCombat 페이로드(player
+  // /foe/fallen/killerName/effect 전부 + recipient 별 자신 status) 를 N 회
+  // stringify 했다. foe HP 만 바뀐 경우라면 풀 페이로드가 아니라 「foe id 와 HP」
+  // 시그널이면 충분 — 클라이언트가 자신의 combatTargetId 와 일치할 때만 패널을
+  // patch 하고, 그 외엔 무시. 룸당 한 번 stringify 후 socket.send 가 같은 문자열을
+  // 재사용한다.
+  broadcastFoeHp(roomId, foe, kind, opts = {}) {
+    const { fallen = null, killerName = null, effect = null, exceptIds = [] } = opts;
+    const targetKey = kind === 'monster' ? `m${foe.id}` : `p${foe.id}`;
+    const msg = {
+      type: 'combat_foe_hp',
+      target: targetKey,
+      foe: kind === 'monster'
+        ? { kind, name: foe.name, defId: foe.defId, icon: foe.icon, hp: Math.max(0, foe.hp), maxHp: foe.maxHp }
+        : { kind, id: foe.id, name: foe.name, icon: foe.icon, hp: Math.max(0, foe.hp), maxHp: foe.maxHp },
+      fallen,
+      killerName,
+      effect,
+    };
+    let payload = null;
+    for (const p of this._roomPlayers(roomId)) {
+      if (exceptIds.includes(p.id)) continue;
+      if (p.combatTargetId !== targetKey) continue;
+      if (!p.socket || p.socket.readyState !== 1) continue;
+      if (payload === null) payload = JSON.stringify(msg);
+      p.socket.send(payload);
+      // killingBlow 시점에는 호출자가 onlooker 의 combatTargetId 를 null 로
+      // 정리하고 싶어할 수 있으나, 그 책임은 호출자에 둔다 — 이 헬퍼는 송신만.
+    }
   }
 }

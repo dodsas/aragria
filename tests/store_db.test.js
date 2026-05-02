@@ -266,3 +266,21 @@ test('마이그레이션: users.json 이 손상돼 있어도 init 은 성공 (sk
   });
   assert.match(u.sessionToken, /^[a-f0-9]{64}$/);
 });
+
+// ── flush chunking 회귀 가드 ────────────────────────────────────────────
+
+test('flushNow: 청크 단위로 분할되어도 모든 dirty 사용자가 영속된다', async () => {
+  // FLUSH_CHUNK_SIZE=200. 그 경계를 확실히 넘기는 250 명을 만들어 두 청크로
+  // 잘려도 누락 없이 모두 디스크에 들어가는지 검증. 청크 사이에 await 가
+  // 들어가도 중간 dirty 누락이 없도록 「flushNow 호출 시점에 ids 를 스냅샷」
+  // 시맨틱이 유지되는지가 핵심.
+  const COUNT = 250;
+  for (let i = 0; i < COUNT; i++) {
+    loginNaverUser({ providerUserId: `bulk_${i}`, nickname: `u${i}` });
+  }
+  await flushNow();
+  await dbReadback(async (c) => {
+    const rs = await c.execute('SELECT COUNT(*) AS n FROM users');
+    assert.equal(Number(rs.rows[0].n), COUNT);
+  });
+});

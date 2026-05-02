@@ -36,6 +36,11 @@ function localDbPath() {
 }
 
 const FLUSH_DEBOUNCE_MS = 1500;
+// libsql `client.batch` 는 단일 트랜잭션이라 1k row 가 묶이면 메모리·락이
+// 한 번에 잡힌다. 200 row 청크로 잘라 순차 실행 — 부분 실패가 나도 그 청크만
+// retry 큐로 복귀하고 나머지는 영속이 보장된다. 청크 사이즈는 평균 row 크기
+// (~400B) × 200 = 80KB 로, libsql 의 기본 frame budget 안에 충분히 들어가는 값.
+const FLUSH_CHUNK_SIZE = 200;
 
 const SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS users (
   naver_id TEXT PRIMARY KEY,
@@ -177,18 +182,22 @@ export async function flushNow() {
   dirtyUserIds = new Set();
 
   flushPromise = (async () => {
-    try {
-      const stmts = ids.map(id => {
+    // 청크 단위로 잘라 batch — 부분 실패 시 해당 청크의 ids 만 dirty 큐로
+    // 복귀시켜 다음 timer 가 재시도, 다른 청크는 이미 영속됐으니 손해 없음.
+    for (let i = 0; i < ids.length; i += FLUSH_CHUNK_SIZE) {
+      const chunkIds = ids.slice(i, i + FLUSH_CHUNK_SIZE);
+      const stmts = chunkIds.map(id => {
         const u = state.byNaverId[id];
         return u
           ? buildUpsertStatement(u)
           : { sql: 'DELETE FROM users WHERE naver_id = ?', args: [id] };
       });
-      await client.batch(stmts);
-    } catch (err) {
-      console.error('[store] flush failed:', err.message);
-      // 실패 시 dirty 복원 — 다음 timer 가 재시도.
-      for (const id of ids) dirtyUserIds.add(id);
+      try {
+        await client.batch(stmts);
+      } catch (err) {
+        console.error('[store] flush chunk failed:', err.message);
+        for (const id of chunkIds) dirtyUserIds.add(id);
+      }
     }
   })();
   await flushPromise;
