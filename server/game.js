@@ -206,6 +206,27 @@ const EXP_TABLE = [
 ];
 const MAX_LEVEL = EXP_TABLE.length;
 
+// 레벨별로 시전 가능한 마법 메뉴를 모듈 로드 시 한 번만 빌드해 둔 테이블.
+// pushStatus 마다 Object.entries(SPELL_DEFS) 를 매번 돌며 minLevel 필터링 +
+// 새 객체 N 개 할당하던 비용을 1k mage × 잦은 status push 에서 제거. 같은
+// 레벨의 모든 마법사는 동일한 배열 인스턴스를 공유해 송신만 일어난다 — 클라
+// 입장에선 매번 깊은 사본을 받아 이쪽 mutation 위험은 없음. 새 마법을 추가하면
+// 모듈 로드 때 자동 반영(SPELL_DEFS 가 단일 진실원).
+const SPELLS_BY_LEVEL = (() => {
+  const sortedDefs = Object.entries(SPELL_DEFS);
+  const arr = new Array(MAX_LEVEL + 1);
+  for (let lv = 0; lv <= MAX_LEVEL; lv++) {
+    const list = [];
+    for (const [id, s] of sortedDefs) {
+      if (lv >= s.minLevel) {
+        list.push({ id, name: s.name, mpCost: s.mpCost, element: s.element, minLevel: s.minLevel });
+      }
+    }
+    arr[lv] = list;
+  }
+  return arr;
+})();
+
 function levelFromExp(exp) {
   // 누적 exp 를 받아 현재 레벨을 돌려준다. 표 끝을 넘어가면 MAX_LEVEL 에 고정.
   let level = 1;
@@ -325,6 +346,17 @@ export class Game {
     // 동기화 지점: registerPlayer / _addAuthenticatedPlayer (hydrate 후) /
     // changeClass / _unindexPlayer. Set 이라 add 는 idempotent.
     this.mages = new Set();
+    // 등록된 + 생성 중(generating) 캐릭터 이름의 Set. registerPlayer 의 이름
+    // 중복 검사가 옛 this.players.values() 풀 순회(1k) 대신 O(1) Set.has 로
+    // 떨어지도록. 동시 가입자 N 명이 같은 이름을 시도해도 비용 일정. 동기화:
+    // registerPlayer 이름 reservation 시 add, 생성 중간 abort 시 delete,
+    // _addAuthenticatedPlayer hydrate 시 add, _finalizePlayer 시 delete.
+    this.playerNames = new Set();
+    // roomId → Map<monId, monster>. 옛 Array 구조의 monsters.find(m=>m.id===id)
+    // 와 splice(indexOf) 가 O(N_room) 였던 것을 O(1) get/delete 로. 이름·defId
+    // 매칭은 여전히 .values() 순회지만 룸 몬스터 수(≤ 수십)에서 충분히 빠르고,
+    // hot path(applyMonsterDamage 후 killing blow / useItem 의 combat refresh /
+    // castSpell 의 자기 타깃 재해소)는 모두 id 기반이라 인덱스 룩업으로 떨어진다.
     this.roomMonsters = new Map();
     this._spawnMonsters();
     this._startRegenTick();
@@ -344,7 +376,7 @@ export class Game {
   _regenTick(perTickRatio) {
     for (const [roomId, monsters] of this.roomMonsters) {
       let anyChanged = false;
-      for (const m of monsters) {
+      for (const m of monsters.values()) {
         if (m.dead) continue;
         if (m.hp >= m.maxHp) continue;
         const rate = m.hpRegen || 0;
@@ -395,14 +427,16 @@ export class Game {
   // 페이로드는 수신자 모두 동일하게 만들 수 있어 한 번만 stringify 후 socket.send
   // 가 같은 문자열을 재사용한다(룸당 N 명이면 옛 N 회 직렬화 → 1 회).
   _buildRoomPayload(roomId) {
-    const list = this.roomMonsters.get(roomId) || [];
+    const map = this.roomMonsters.get(roomId);
     const monsters = [];
-    for (const m of list) {
-      if (m.dead) continue;
-      monsters.push({
-        id: m.id, defId: m.defId, name: m.name, icon: m.icon,
-        hp: Math.max(0, m.hp), maxHp: m.maxHp,
-      });
+    if (map) {
+      for (const m of map.values()) {
+        if (m.dead) continue;
+        monsters.push({
+          id: m.id, defId: m.defId, name: m.name, icon: m.icon,
+          hp: Math.max(0, m.hp), maxHp: m.maxHp,
+        });
+      }
     }
     const room = ROOMS[roomId];
     const objects = (room?.objects || [])
@@ -432,12 +466,30 @@ export class Game {
     }
   }
 
+  // 룸의 살아 있는 몬스터 인덱스 Map<monId, monster>. 없으면 빈 Map. 호출자
+  // mutation 은 _addMonsterToRoom / _removeMonsterFromRoom 헬퍼 한 곳으로.
+  _roomMonstersMap(roomId) {
+    return this.roomMonsters.get(roomId);
+  }
+
+  _addMonsterToRoom(roomId, monster) {
+    let map = this.roomMonsters.get(roomId);
+    if (!map) { map = new Map(); this.roomMonsters.set(roomId, map); }
+    map.set(monster.id, monster);
+  }
+
+  _removeMonsterFromRoom(roomId, monsterId) {
+    const map = this.roomMonsters.get(roomId);
+    if (!map) return;
+    map.delete(monsterId);
+    // 빈 룸 키는 정리 — 메모리 잔존 차단(roomMembers 와 동일한 정책).
+    if (map.size === 0) this.roomMonsters.delete(roomId);
+  }
+
   _spawnMonsters() {
     // 초기 스폰은 zone 모듈의 spawns 선언에서 온다(zone.md 참조).
     for (const { roomId, defId } of INITIAL_SPAWNS) {
-      const list = this.roomMonsters.get(roomId) || [];
-      list.push(spawnMonster(defId));
-      this.roomMonsters.set(roomId, list);
+      this._addMonsterToRoom(roomId, spawnMonster(defId));
     }
   }
 
@@ -449,9 +501,7 @@ export class Game {
     const [minMs, maxMs] = range;
     const delay = minMs + Math.floor(Math.random() * (maxMs - minMs + 1));
     setTimeout(() => {
-      const list = this.roomMonsters.get(roomId) || [];
-      list.push(spawnMonster(defId));
-      this.roomMonsters.set(roomId, list);
+      this._addMonsterToRoom(roomId, spawnMonster(defId));
       this.broadcastRoom(roomId, {
         type: 'text',
         segments: [{ text: def.name, cls: 'monster-name' }, { text: '이(가) 나타났다.' }],
@@ -665,6 +715,9 @@ export class Game {
     if (p.naverId) this.naverIdToPlayer.delete(p.naverId);
     if (p.roomId) this._unindexFromRoom(p, p.roomId);
     this.mages.delete(p.id);
+    // 이름 reservation 도 함께 해제 — 같은 이름의 다른 사용자가 다시 등록할
+    // 수 있도록. 빈 이름(stub) 은 Set 에 들어 있지 않아 delete 가 no-op.
+    if (p.name) this.playerNames.delete(p.name);
   }
 
   // 룸 멤버 인덱스 갱신 — register/move/respawn/_addAuthenticatedPlayer/_finalizePlayer
@@ -776,6 +829,7 @@ export class Game {
     player.registered = true;
     this._indexInRoom(player, player.roomId);
     if (player.klass === 'mage') this.mages.add(player.id);
+    if (player.name) this.playerNames.add(player.name);
 
     this.send(player, { type: 'system', text: `${player.name}, 다시 만나서 반갑습니다.` });
     this.pushStatus(player);
@@ -974,18 +1028,16 @@ export class Game {
     // Reject duplicate live names so attack/look targeting (exact-match) stays
     // unambiguous. Also reject names already reserved by another stub mid-
     // generation, otherwise two parallel registers race and the loser fails
-    // ~30s later after the user has stared at a progress spinner.
-    for (const p of this.players.values()) {
-      if (p.id === player.id) continue;
-      if (p.name !== cleanName) continue;
-      if (p.registered || p.generating) {
-        if (!silent) this.send(player, { type: 'register_error', text: '같은 이름의 모험가가 이미 있습니다.' });
-        return;
-      }
+    // ~30s later after the user has stared at a progress spinner. 옛 코드의
+    // this.players.values() 풀 순회 대신 playerNames Set 으로 O(1).
+    if (this.playerNames.has(cleanName)) {
+      if (!silent) this.send(player, { type: 'register_error', text: '같은 이름의 모험가가 이미 있습니다.' });
+      return;
     }
 
     // Reserve the name on the stub before yielding so concurrent registrations
     // from other players see the slot occupied during sprite generation.
+    this.playerNames.add(cleanName);
     player.name = cleanName;
     player.description = cleanDesc;
     player.generating = true;
@@ -1005,8 +1057,13 @@ export class Game {
 
     // Player may have disconnected/finalized while we awaited. Stubs are
     // dropped immediately on socket close (no grace), so the typical case is
-    // `players.has(id) === false` here and we abort silently.
-    if (!this.players.has(player.id)) return;
+    // `players.has(id) === false` here and we abort silently. 이 경로에선
+    // 위에서 reserve 한 cleanName 을 풀어 줘야 — playerNames Set 에 dangling
+    // 엔트리가 남으면 다음 동일 이름 등록자가 영구 차단된다.
+    if (!this.players.has(player.id)) {
+      this.playerNames.delete(cleanName);
+      return;
+    }
     if (player.registered) return;
 
     player.spriteSvg = svg; // null is fine — client falls back to default.
@@ -1159,15 +1216,18 @@ export class Game {
     this.send(player, { type: 'text', text: `── ${room.name} ──` });
     this.send(player, { type: 'text', text: room.desc });
     this.send(player, { type: 'text', text: `보이는 것: ${objs}` });
-    const monsters = this.roomMonsters.get(room.id) || [];
-    if (monsters.length > 0) {
+    const monstersMap = this.roomMonsters.get(room.id);
+    if (monstersMap && monstersMap.size > 0) {
       const segs = [{ text: '적: ' }];
-      monsters.forEach((m, i) => {
+      let i = 0;
+      for (const m of monstersMap.values()) {
+        if (m.dead) continue;
         if (i > 0) segs.push({ text: ', ' });
         segs.push({ text: m.name, cls: 'monster-name' });
         segs.push({ text: ` (${m.hp}/${m.maxHp})` });
-      });
-      this.seg(player, segs);
+        i += 1;
+      }
+      if (i > 0) this.seg(player, segs);
     }
     if (others) this.send(player, { type: 'text', text: `이곳에 있는 사람: ${others}` });
     this.send(player, { type: 'text', text: `출구: ${exits}` });
@@ -1204,11 +1264,17 @@ export class Game {
       return;
     }
 
-    const monsters = this.roomMonsters.get(player.roomId) || [];
-    const monster = monsters.find(m =>
-      m.name === target || m.defId === target ||
-      (target.length >= 2 && m.name.includes(target))
-    );
+    const monstersMap = this.roomMonsters.get(player.roomId);
+    let monster = null;
+    if (monstersMap) {
+      for (const m of monstersMap.values()) {
+        if (m.dead) continue;
+        if (m.name === target || m.defId === target ||
+            (target.length >= 2 && m.name.includes(target))) {
+          monster = m; break;
+        }
+      }
+    }
     if (monster) {
       const def = MONSTER_DEFS[monster.defId];
       this.send(player, { type: 'text', text: def.desc });
@@ -1435,9 +1501,9 @@ export class Game {
       const tid = player.combatTargetId;
       if (tid.startsWith('m')) {
         const mid = Number(tid.slice(1));
-        const list = this.roomMonsters.get(player.roomId) || [];
-        const foe = list.find(m => m.id === mid && !m.dead);
-        if (foe) this.pushCombat(player, foe, 'monster');
+        const map = this.roomMonsters.get(player.roomId);
+        const foe = map ? map.get(mid) : null;
+        if (foe && !foe.dead) this.pushCombat(player, foe, 'monster');
       } else if (tid.startsWith('p')) {
         const foe = this.players.get(tid.slice(1));
         if (foe) this.pushCombat(player, foe, 'player');
@@ -1557,14 +1623,20 @@ export class Game {
   _doAttack(player, arg) {
     player.lastAttackAt = Date.now();
 
-    const monsters = this.roomMonsters.get(player.roomId) || [];
+    const monstersMap = this.roomMonsters.get(player.roomId);
 
     if (arg) {
       // Monster: exact name/defId or substring of length ≥ 2. Single-char
       // probes can no longer auto-resolve to whatever happens to be in the room.
-      const monster = monsters.find(m => !m.dead && (
-        m.name === arg || m.defId === arg || (arg.length >= 2 && m.name.includes(arg))
-      ));
+      let monster = null;
+      if (monstersMap) {
+        for (const m of monstersMap.values()) {
+          if (m.dead) continue;
+          if (m.name === arg || m.defId === arg || (arg.length >= 2 && m.name.includes(arg))) {
+            monster = m; break;
+          }
+        }
+      }
       if (monster) return this._attackMonster(player, monster);
 
       // Player: exact name or numeric id only. Substring matching dropped —
@@ -1598,11 +1670,16 @@ export class Game {
     // 필요 없다)를 갖는다. fallback 은 기존 동작 — 방의 첫 번째 살아 있는
     // 몬스터.
     let monster = null;
-    if (player.combatTargetId && player.combatTargetId.startsWith('m')) {
+    if (monstersMap && player.combatTargetId && player.combatTargetId.startsWith('m')) {
       const id = Number(player.combatTargetId.slice(1));
-      monster = monsters.find(m => m.id === id && !m.dead) || null;
+      const m = monstersMap.get(id);
+      if (m && !m.dead) monster = m;
     }
-    if (!monster) monster = monsters.find(m => !m.dead);
+    if (!monster && monstersMap) {
+      for (const m of monstersMap.values()) {
+        if (!m.dead) { monster = m; break; }
+      }
+    }
     if (monster) return this._attackMonster(player, monster);
     this.send(player, { type: 'system', text: '공격할 대상이 없습니다.' });
   }
@@ -1632,29 +1709,39 @@ export class Game {
     // we also flag the killer as a kill-stealer if any of these onlookers were
     // engaged with this same monster — they are the victims of the steal.
     //
-    // 옛 코드: onlooker 마다 풀 pushCombat 페이로드를 N 회 stringify.
-    // 새 코드: 텍스트 라인은 onlooker 별로 다르므로 그대로 개별 송신, 하지만
-    // 「foe HP 갱신」 만 broadcastFoeHp 로 한 번 stringify 후 재사용. killSteal
-    // 첫 victim 식별을 위해 onlooker 1 회 순회는 유지.
+    // 옛 코드: onlooker 마다 풀 pushCombat 페이로드를 N 회 stringify, 그리고
+    // 텍스트 라인도 seg 호출로 N 회 직렬화. 텍스트는 「공격자 N 이 X 에게 D
+    // 피해」 라 모든 onlooker 에게 동일 — 룸당 한 번 stringify 한 raw 페이로드를
+    // socket.send 로 N 회 재사용한다. killSteal victim 식별을 위해 같은 순회에서
+    // 첫 engaged 인 사람만 캡처.
     const engagementKey = `m${target.id}`;
+    const damagePayload = JSON.stringify({
+      type: 'text',
+      segments: [
+        { text: player.name, cls: 'tx-player' },
+        { text: '님이 ' },
+        { text: target.name, cls: 'monster-name' },
+        { text: `에게 ${dmgOut}의 피해를 입혔다.` },
+      ],
+    });
+    const fallenPayload = killingBlow ? JSON.stringify({
+      type: 'text',
+      segments: [
+        { text: target.name, cls: 'monster-name' },
+        { text: '이(가) ' },
+        { text: player.name, cls: 'tx-player' },
+        { text: '님에게 쓰러졌다.' },
+      ],
+    }) : null;
     let killStealVictimName = null;
     let killStealVictimId = null;
     for (const p of this._roomPlayers(player.roomId)) {
       if (p.id === player.id) continue;
       if (p.combatTargetId !== engagementKey) continue;
-      this.seg(p, [
-        { text: player.name, cls: 'tx-player' },
-        { text: '님이 ' },
-        { text: target.name, cls: 'monster-name' },
-        { text: `에게 ${dmgOut}의 피해를 입혔다.` },
-      ]);
-      if (killingBlow) {
-        this.seg(p, [
-          { text: target.name, cls: 'monster-name' },
-          { text: '이(가) ' },
-          { text: player.name, cls: 'tx-player' },
-          { text: '님에게 쓰러졌다.' },
-        ]);
+      if (!p.socket || p.socket.readyState !== 1) continue;
+      p.socket.send(damagePayload);
+      if (fallenPayload) {
+        p.socket.send(fallenPayload);
         // First engaged onlooker becomes the named blocker. Multiple victims
         // could exist; one name is enough for the message.
         if (!killStealVictimName) {
@@ -1674,8 +1761,7 @@ export class Game {
 
     if (killingBlow) {
       const roomId = player.roomId;
-      const list = this.roomMonsters.get(roomId);
-      list.splice(list.indexOf(target), 1);
+      this._removeMonsterFromRoom(roomId, target.id);
       this.seg(player, [{ text: target.name, cls: 'monster-name' }, { text: '이(가) 쓰러졌다!' }]);
       this.pushCombat(player, target, 'monster', 'foe');
       player.combatTargetId = null;
@@ -1727,9 +1813,10 @@ export class Game {
       return;
     }
     this.pushCombat(player, target, 'monster');
-    this.pushStatus(player);
-    // 비교전 룸메이트도 HP 바 변화를 보도록 룸 전체에 갱신 푸시.
-    this._pushRoomMonsters(player.roomId);
+    // 옛 코드는 풀 pushStatus 로 equipment/inventory/spells 까지 같이 직렬화·재렌더
+    // 했지만, 공격 hot path 에서 변동하는 사이드바 정보는 hp 한 칸 뿐이다(반격으로
+    // 차감된 HP). 1k 동시 전투에서 가장 뜨거운 라인이라 partial delta 로만.
+    this.pushStatusDelta(player, { hp: player.hp });
   }
 
   // 보유 마법 목록을 로그에 출력. 마법사가 아니면 안내, 해금된 마법은
@@ -1814,22 +1901,32 @@ export class Game {
       return this.send(player, { type: 'system', text: `${remainSec}초 후 시전 가능합니다.` });
     }
 
-    const monsters = this.roomMonsters.get(player.roomId) || [];
+    const monstersMap = this.roomMonsters.get(player.roomId);
     let target = null;
     if (arg) {
-      target = monsters.find(m => !m.dead && (
-        m.name === arg || m.defId === arg || (arg.length >= 2 && m.name.includes(arg))
-      ));
+      if (monstersMap) {
+        for (const m of monstersMap.values()) {
+          if (m.dead) continue;
+          if (m.name === arg || m.defId === arg || (arg.length >= 2 && m.name.includes(arg))) {
+            target = m; break;
+          }
+        }
+      }
       if (!target) {
         return this.send(player, { type: 'system', text: `'${arg}'을(를) 찾을 수 없습니다.` });
       }
     } else {
       // attack 과 동일한 우선순위 — 교전 중이면 그 몬스터, 아니면 방의 첫 번째.
-      if (player.combatTargetId && player.combatTargetId.startsWith('m')) {
+      if (monstersMap && player.combatTargetId && player.combatTargetId.startsWith('m')) {
         const id = Number(player.combatTargetId.slice(1));
-        target = monsters.find(m => m.id === id && !m.dead) || null;
+        const m = monstersMap.get(id);
+        if (m && !m.dead) target = m;
       }
-      if (!target) target = monsters.find(m => !m.dead);
+      if (!target && monstersMap) {
+        for (const m of monstersMap.values()) {
+          if (!m.dead) { target = m; break; }
+        }
+      }
       if (!target) {
         return this.send(player, { type: 'system', text: '시전할 대상이 없습니다.' });
       }
@@ -1862,30 +1959,39 @@ export class Game {
     ]);
 
     // 같은 몬스터 교전 중인 다른 플레이어들도 본다 — _attackMonster 패턴과 동일.
-    // 텍스트 라인은 onlooker 별로 다르므로 개별 송신, foe HP 갱신은 broadcastFoeHp
-    // 한 번 stringify 후 재사용. spellEffect 도 같은 시그널에 실어 마법 시각효과가
-    // onlooker 패널에서도 발화한다.
+    // 텍스트는 onlooker 모두 동일하므로 룸당 한 번 stringify 한 raw 페이로드를
+    // socket.send 로 N 회 재사용. foe HP 갱신은 broadcastFoeHp + spellEffect 가
+    // 책임지고, 여기서는 텍스트 + killSteal victim 식별만.
     const engagementKey = `m${target.id}`;
-    let killStealVictimName = null;
-    let killStealVictimId = null;
-    for (const p of this._roomPlayers(player.roomId)) {
-      if (p.id === player.id) continue;
-      if (p.combatTargetId !== engagementKey) continue;
-      this.seg(p, [
+    const damagePayload = JSON.stringify({
+      type: 'text',
+      segments: [
         { text: player.name, cls: 'tx-player' },
         { text: `의 ${spell.name}이(가) ` },
         { text: target.name, cls: 'monster-name' },
         { text: '에게 ' },
         { text: String(dmg), cls: dmgCls },
         { text: '의 피해를 입혔다.' },
-      ]);
-      if (killingBlow) {
-        this.seg(p, [
-          { text: target.name, cls: 'monster-name' },
-          { text: '이(가) ' },
-          { text: player.name, cls: 'tx-player' },
-          { text: '님에게 쓰러졌다.' },
-        ]);
+      ],
+    });
+    const fallenPayload = killingBlow ? JSON.stringify({
+      type: 'text',
+      segments: [
+        { text: target.name, cls: 'monster-name' },
+        { text: '이(가) ' },
+        { text: player.name, cls: 'tx-player' },
+        { text: '님에게 쓰러졌다.' },
+      ],
+    }) : null;
+    let killStealVictimName = null;
+    let killStealVictimId = null;
+    for (const p of this._roomPlayers(player.roomId)) {
+      if (p.id === player.id) continue;
+      if (p.combatTargetId !== engagementKey) continue;
+      if (!p.socket || p.socket.readyState !== 1) continue;
+      p.socket.send(damagePayload);
+      if (fallenPayload) {
+        p.socket.send(fallenPayload);
         if (!killStealVictimName) {
           killStealVictimName = p.name;
           killStealVictimId = p.id;
@@ -1902,8 +2008,7 @@ export class Game {
 
     if (killingBlow) {
       const roomId = player.roomId;
-      const list = this.roomMonsters.get(roomId);
-      list.splice(list.indexOf(target), 1);
+      this._removeMonsterFromRoom(roomId, target.id);
       this.seg(player, [{ text: target.name, cls: 'monster-name' }, { text: '이(가) 쓰러졌다!' }]);
       this.pushCombat(player, target, 'monster', 'foe', null, spellEffect);
       player.combatTargetId = null;
@@ -1946,7 +2051,8 @@ export class Game {
     // 시전 사이클이 끝난 시점엔 mp(차감) 와 hp(반격) 만 변동. inventory/equipment/
     // level/maxHp/maxMp/spells 는 같음 — partial 로 보내 사이드바 풀 재구성 회피.
     this.pushStatusDelta(player, { hp: player.hp, mp: player.mp });
-    this._pushRoomMonsters(player.roomId);
+    // foe HP 변동은 broadcastFoeHp 가 담당 — 룸 패널의 monsters 리스트 자체는
+    // 변하지 않으므로 _pushRoomMonsters 는 spawn/death 사이트에서만.
   }
 
   // PvP: attacker hits target once. Defender does NOT auto-counter — they
@@ -1979,22 +2085,34 @@ export class Game {
       { text: `${dmgOut}의 피해를 입혔다. 체력: ${target.hp}/${target.maxHp}` },
     ]);
 
-    // Observers in the same room get a public combat log line. Other
-    // engaged attackers (combatTargetId === pX) see the panel update too.
+    // Observers in the same room get a public combat log line. 옛 코드는
+    // 라인을 onlooker 별 seg 로 N 회 직렬화 + 같은 타깃을 교전 중인 사람에게
+    // 풀 pushCombat 페이로드(player 자기 status 포함) 를 또 N 회 직렬화했다.
+    // 텍스트는 모두 동일하므로 룸당 한 번 stringify, 같은 타깃 교전자 패널은
+    // broadcastFoeHp(kind:'player') 가 룸당 한 번 stringify — 자기 status 는
+    // 클라가 lastStatus 캐시에서 합성. 가해자/피해자만 풀 pushCombat 으로
+    // 자기 hp/mp 정확히 반영.
     const engagementKey = `p${target.id}`;
-    for (const p of this._roomPlayers(attacker.roomId)) {
-      if (p.id === attacker.id || p.id === target.id) continue;
-      this.seg(p, [
+    const observerPayload = JSON.stringify({
+      type: 'text',
+      segments: [
         { text: attacker.name, cls: 'tx-player' },
         { text: '님이 ' },
         { text: target.name, cls: 'tx-player' },
         { text: `님에게 ${dmgOut}의 피해를 입혔다.` },
-      ]);
-      if (p.combatTargetId === engagementKey) {
-        this.pushCombat(p, target, 'player', killingBlow ? 'foe' : null, killingBlow ? attacker.name : null);
-        if (killingBlow) p.combatTargetId = null;
-      }
+      ],
+    });
+    for (const p of this._roomPlayers(attacker.roomId)) {
+      if (p.id === attacker.id || p.id === target.id) continue;
+      if (!p.socket || p.socket.readyState !== 1) continue;
+      p.socket.send(observerPayload);
+      if (killingBlow && p.combatTargetId === engagementKey) p.combatTargetId = null;
     }
+    this.broadcastFoeHp(attacker.roomId, target, 'player', {
+      fallen: killingBlow ? 'foe' : null,
+      killerName: killingBlow ? attacker.name : null,
+      exceptIds: [attacker.id, target.id],
+    });
 
     // Attacker's panel: shows target as foe.
     this.pushCombat(attacker, target, 'player', killingBlow ? 'foe' : null);
@@ -2112,17 +2230,11 @@ export class Game {
     const expNext = nextExp == null ? 0 : Math.max(1, nextExp - baseExp);
 
     // 클라 마법 메뉴 채우기용 — 현재 레벨에서 시전 가능한 마법만 노출.
-    // 새로 잠금해제된 마법은 _grantExp 가 system 라인으로 별도 안내.
-    const spells = [];
-    if (player.klass === 'mage') {
-      for (const [id, s] of Object.entries(SPELL_DEFS)) {
-        if (player.level >= s.minLevel) {
-          spells.push({
-            id, name: s.name, mpCost: s.mpCost, element: s.element, minLevel: s.minLevel,
-          });
-        }
-      }
-    }
+    // 새로 잠금해제된 마법은 _grantExp 가 system 라인으로 별도 안내. 테이블은
+    // 모듈 로드 시 미리 빌드(SPELLS_BY_LEVEL) — pushStatus 마다 새로 만들지 않는다.
+    const spells = player.klass === 'mage'
+      ? SPELLS_BY_LEVEL[Math.min(player.level, MAX_LEVEL)] || []
+      : [];
 
     this.send(player, {
       type: 'status',

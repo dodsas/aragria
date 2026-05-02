@@ -232,9 +232,10 @@ test('lookAt monster: 드랍 정의가 있으면 「드랍:」 segment 라인이
   g.players.set(player.id, player);
   g._indexInRoom(player, 'square');
   // 룸에 고블린 한 마리 주입(스폰 시스템 우회 — _spawnMonsters 가 돌렸을 수도
-  // 있으나 이 테스트는 결정적 입력을 위해 직접 푸시).
+  // 있으나 이 테스트는 결정적 입력을 위해 직접 푸시). roomMonsters 가 룸당
+  // Map<monId, monster> 인덱스라 Map 으로 시드.
   const m = { id: 9001, defId: 'goblin', name: '고블린', icon: '🧌', hp: 20, maxHp: 20, dead: false };
-  g.roomMonsters.set('square', [m]);
+  g.roomMonsters.set('square', new Map([[m.id, m]]));
 
   g.lookAt(player, '고블린');
 
@@ -261,7 +262,7 @@ test('lookAt monster: 드랍 정의가 비어 있으면 「드랍:」 라인이 
   // Monkey-patch — 일시적으로 goblin 의 drops 를 dangling id 로 바꿈.
   // (전역 MONSTER_DEFS 에 직접 손대면 후속 테스트 오염 위험이라 같은 방식 회피)
   const m = { id: 9002, defId: 'goblin', name: '고블린', icon: '🧌', hp: 20, maxHp: 20, dead: false };
-  g.roomMonsters.set('square', [m]);
+  g.roomMonsters.set('square', new Map([[m.id, m]]));
   // 실 dangling 케이스는 로직 분기만 검증 — 실제 drops 는 goblin 에 정상이라
   // 「드랍 라인이 한 번 나간다」 는 직전 테스트가 충분하고, 여기선 segments 의
   // 마지막이 chance 토큰임을 확인해 형상이 깨지지 않았는지만 확인.
@@ -474,4 +475,74 @@ test('_sendRoomSprites: 룸메 N 명의 sprite 가 character_sprites { sprites: 
   assert.equal(batch.sprites.length, 2, 'B/C 만 포함, D 는 sprite 없어 빠짐');
   const ids = batch.sprites.map(s => s.playerId).sort();
   assert.deepEqual(ids, [2, 3]);
+});
+
+// ── playerNames 인덱스: H2 회귀 가드 ────────────────────────────────
+
+test('playerNames: 등록된 이름 set 에 추가, _unindexPlayer 시 정리', () => {
+  // 옛 코드는 register dedup 을 this.players.values() 풀 순회로 처리. 새 코드는
+  // playerNames Set 으로 O(1) — 동기화 지점은 register/hydrate add, finalize delete.
+  const g = new Game();
+  const p = { id: 5, sid: 'sX', naverId: 'nX', roomId: 'square', name: '시드영웅' };
+  g.players.set(p.id, p);
+  g._indexInRoom(p, 'square');
+  g.playerNames.add(p.name);
+  assert.equal(g.playerNames.has('시드영웅'), true);
+  g._unindexPlayer(p);
+  assert.equal(g.playerNames.has('시드영웅'), false);
+});
+
+// ── SPELLS_BY_LEVEL precompute: H3 회귀 가드 ───────────────────────
+
+test('pushStatus: mage 의 spells 페이로드가 레벨별 minLevel 필터 결과와 일치 + 같은 직접-참조를 재사용', () => {
+  // 같은 레벨 mage 두 명에게 같은 raw stringify 가 적용되는지 검증 — pushStatus
+  // 마다 spells 배열을 새로 빌드하면 같은 stringify 결과라도 별 보장이 없지만,
+  // SPELLS_BY_LEVEL 테이블에서 직접 꺼내면 매번 같은 객체 그래프를 직렬화하므로
+  // raw 문자열이 정확히 동일하다(필드 순서까지 보존).
+  const g = new Game();
+  const sentA = []; const sentB = [];
+  const a = {
+    id: 1, name: 'a', registered: true, klass: 'mage', level: 11,
+    exp: 0, hp: 100, maxHp: 100, mp: 30, maxMp: 30, roomId: 'square',
+    equipment: {}, inventory: [], icon: '🧙',
+    socket: { readyState: 1, send: (raw) => sentA.push(raw) },
+  };
+  const b = { ...a, id: 2, name: 'b',
+    socket: { readyState: 1, send: (raw) => sentB.push(raw) } };
+  g.players.set(a.id, a); g.players.set(b.id, b);
+  g.pushStatus(a); g.pushStatus(b);
+  const parsedA = JSON.parse(sentA.find(s => JSON.parse(s).type === 'status'));
+  const parsedB = JSON.parse(sentB.find(s => JSON.parse(s).type === 'status'));
+  assert.ok(parsedA.status.spells.length >= 2, 'L11 에서 fireball + ice_arrow 이상 노출');
+  // spells 배열은 두 사용자 모두 같은 형상.
+  assert.deepEqual(parsedA.status.spells, parsedB.status.spells);
+  // L9(전직 미가능) 은 빈 배열 — 분기 일관.
+  const novice = { ...a, id: 3, klass: 'novice', level: 9,
+    socket: { readyState: 1, send: () => {} } };
+  g.players.set(novice.id, novice);
+  const sentN = [];
+  novice.socket.send = (raw) => sentN.push(raw);
+  g.pushStatus(novice);
+  const parsedN = JSON.parse(sentN[0]);
+  assert.deepEqual(parsedN.status.spells, []);
+});
+
+// ── roomMonsters Map<monId, monster> 인덱스: H4 회귀 가드 ───────────
+
+test('_addMonsterToRoom / _removeMonsterFromRoom: O(1) get/delete + 빈 Map 정리', () => {
+  const g = new Game();
+  const m1 = { id: 9001, defId: 'goblin', name: '고블린', icon: '🧌', hp: 20, maxHp: 20 };
+  const m2 = { id: 9002, defId: 'goblin', name: '고블린', icon: '🧌', hp: 20, maxHp: 20 };
+  g._addMonsterToRoom('square', m1);
+  g._addMonsterToRoom('square', m2);
+  const map = g.roomMonsters.get('square');
+  assert.ok(map instanceof Map);
+  assert.equal(map.get(9001), m1, 'O(1) id 룩업');
+  assert.equal(map.size, 2);
+  g._removeMonsterFromRoom('square', 9001);
+  assert.equal(map.has(9001), false);
+  assert.equal(map.size, 1);
+  // 마지막 멤버 제거 시 Map 자체가 roomMonsters 에서 사라진다.
+  g._removeMonsterFromRoom('square', 9002);
+  assert.equal(g.roomMonsters.has('square'), false);
 });

@@ -537,6 +537,12 @@ function scrollLogToBottom() {
 let combatDismissTimer = null;
 let lastCombat = { playerHp: null, foeHp: null };
 let inCombat = false;
+// 직전 stage 의 actor identity 와 bar 엘리먼트 캐시. 같은 actor(같은 foe id+kind,
+// 같은 fallen 상태) 가 이어지는 동안엔 stage 를 재구성하지 않고 hp/mp 바의
+// width/textContent 만 patch — 1k 동시 전투에서 가장 잦은 「HP 한 칸 줄어듦」
+// push 의 클라 DOM 비용을 한 자리수로 떨어뜨린다. 스테이지가 새로 만들어질 때
+// (첫 진입 / fallen 토글 / kind/id 전환) 만 ref 를 다시 잡는다.
+let combatStageRefs = null;
 // 모바일 액션 패드의 「선택지 없이 바로 시전」 단축경로용 — 현재 교전 중인
 // foe 의 식별자를 캐싱한다. 서버 권위 원본이 아니라(서버는 별도 brodcast 안 함)
 // combat 메시지의 foe 페이로드를 그대로 쓰는 거울. fallen='foe' 또는 panel
@@ -587,6 +593,7 @@ function renderCombat(combat) {
     lastCombat = { playerHp: null, foeHp: null };
     inCombat = false;
     currentCombatFoe = null;
+    combatStageRefs = null;
     scrollLogToBottom();
     if (typeof renderActionPad === 'function') renderActionPad();
     return;
@@ -608,12 +615,38 @@ function renderCombat(combat) {
   const fallen = combat.fallen || null;
   const playerHurt = lastCombat.playerHp != null && combat.player.hp < lastCombat.playerHp;
   const foeHurt = lastCombat.foeHp != null && combat.foe.hp < lastCombat.foeHp;
+  const foeKind = combat.foe.kind || 'monster';
+  const foeIdent = foeKind === 'monster' ? `m:${combat.foe.defId}` : `p:${combat.foe.id}`;
+  const meIdent = `me:${combat.player.id}`;
+
+  // Fast path: actor identity 가 동일하고 fallen 변동도 없으면 bar 만 갱신.
+  // 「HP 한 칸 줄어듦」 push 가 1k 동시 전투에서 가장 빈번 — stage 전체 재구성을
+  // 회피해 createElement/innerHTML(svg) 비용을 0 으로.
+  if (combatStageRefs && combatStageRefs.foeIdent === foeIdent
+      && combatStageRefs.meIdent === meIdent
+      && combatStageRefs.fallen === fallen
+      && (foeKind !== 'player' || combatStageRefs.foeName === combat.foe.name)) {
+    patchCombatBar(combatStageRefs.meHp, combat.player.hp, combat.player.maxHp);
+    patchCombatBar(combatStageRefs.foeHp, combat.foe.hp, combat.foe.maxHp);
+    if (combatStageRefs.meMp && (combat.player.maxMp || 0) > 0) {
+      patchCombatBar(combatStageRefs.meMp, combat.player.mp || 0, combat.player.maxMp);
+    }
+    // hurt 클래스는 짧은 애니메이션 트리거 — toggle 후 reflow 로 재발화.
+    if (playerHurt) flashHurt(combatStageRefs.meActor);
+    if (foeHurt) flashHurt(combatStageRefs.foeActor);
+    if (combat.effect?.kind === 'spell') {
+      const existing = combatViewEl.querySelector('.cv-spell');
+      if (!existing) spawnSpellEffect(combat.effect);
+    }
+    lastCombat = { playerHp: combat.player.hp, foeHp: combat.foe.hp };
+    return;
+  }
 
   const stage = document.createElement('div');
   stage.className = 'cv-stage';
 
   const actorMe = makeCombatActor(combat.player, false, fallen === 'me', playerHurt, null, 'player');
-  const actorFoe = makeCombatActor(combat.foe, true, fallen === 'foe', foeHurt, combat.killerName, combat.foe.kind || 'monster');
+  const actorFoe = makeCombatActor(combat.foe, true, fallen === 'foe', foeHurt, combat.killerName, foeKind);
   const vs = document.createElement('div');
   vs.className = 'cv-vs';
   vs.textContent = fallen ? '💥' : '⚔';
@@ -627,6 +660,20 @@ function renderCombat(combat) {
   const oldStage = combatViewEl.querySelector('.cv-stage');
   if (oldStage) oldStage.remove();
   combatViewEl.appendChild(stage);
+
+  // 다음 fast-path 가 잡을 ref 셋. bar row 들의 첫·둘째 자식(line/num) 을 직접
+  // 캐싱해 매번 querySelector 하지 않도록.
+  combatStageRefs = {
+    foeIdent,
+    meIdent,
+    fallen,
+    foeName: combat.foe.name,
+    meActor: actorMe,
+    foeActor: actorFoe,
+    meHp: actorMe.querySelector('.cv-bar-hp'),
+    meMp: actorMe.querySelector('.cv-bar-mp'),
+    foeHp: actorFoe.querySelector('.cv-bar-hp'),
+  };
 
   // effect 페이로드가 실려 있으면 overlay 발사. 같은 cast 사이클에서 두 번
   // 이상 메시지가 도착해도(예: caster 자신의 spell 메시지 + 같은 방 onlooker
@@ -649,6 +696,33 @@ function renderCombat(combat) {
       combatDismissTimer = setTimeout(() => renderCombat(null), 400);
     }, 3600);
   }
+}
+
+// fast-path 용 헬퍼 — bar row 안의 fill/empty/num 텍스트를 새 cur/max 값으로
+// 갱신. row 의 형상은 makeCombatBar 와 일치해야 한다.
+function patchCombatBar(row, cur, max) {
+  if (!row) return;
+  const total = max || 1;
+  const value = Math.max(0, cur || 0);
+  const cells = 12;
+  const filled = Math.round((value / total) * cells);
+  const line = row.firstElementChild;
+  if (line) {
+    const fill = line.children[1];
+    const empty = line.children[2];
+    if (fill) fill.textContent = '█'.repeat(filled);
+    if (empty) empty.textContent = '█'.repeat(cells - filled);
+  }
+  const num = row.lastElementChild;
+  if (num) num.textContent = `${value} / ${max || 0}`;
+}
+
+// hurt 애니메이션 재발화 — 기존 클래스 잠깐 제거 → reflow → 다시 추가로 한 번 더.
+function flashHurt(actorEl) {
+  if (!actorEl) return;
+  actorEl.classList.remove('cv-hurt');
+  void actorEl.offsetWidth; // reflow 강제
+  actorEl.classList.add('cv-hurt');
 }
 
 // 관전자(같은 몬스터 교전 중인 다른 플레이어) 에게 가는 「foe HP 만 변동」 시그널.
@@ -1046,20 +1120,31 @@ const escapeHtml = (s) => s
   .replace(/</g, '&lt;')
   .replace(/>/g, '&gt;');
 
+// 옛 코드는 8 개 분기를 8 회의 String.replace 로 돌려 매번 풀스캔 + 새 문자열
+// 할당을 했다. 한 정규식의 alternation 으로 묶어 1 회 패스로 끝낸다 — 매 로그
+// 라인 호출에서 string copy/할당 비용을 1/8 로. quote 분기는 다른 분기보다 먼저
+// 매칭되어야 attribute quote 를 안 잡으므로 alternation 의 첫 슬롯에 배치한다.
+//
+// 그룹 인덱스(가장 바깥 alternation 기준):
+//   1: quote          ("...")
+//   2: room title     (── X ──)
+//   3: label + 4: ':'
+//   5/6/7: hp triple  (\d+ / \d+)
+//   8: dmg num + 9: '의 피해'
+//   10: dir en  11: dir ko  12: traveler
+const HIGHLIGHT_RE = /("[^"\n]+")|(──\s+[^─\n]+?\s+──)|(보이는 것|출구|이곳에 있는 사람|적|체력|명령)(:)|(\d+)(\s*\/\s*)(\d+)|(\d+)(의\s*피해)|\b(north|south|east|west)\b|(북쪽|남쪽|동쪽|서쪽)|(여행자\d+)/gi;
 function highlightText(raw) {
-  // Order matters: run quote-wrapping FIRST (before any <span ...> tags exist),
-  // otherwise the regex catches attribute quotes like class="tx-room".
-  let out = escapeHtml(raw);
-  out = out.replace(/("[^"\n]+")/g, '\x00QSTART\x00$1\x00QEND\x00');
-  out = out.replace(/(──\s+[^─\n]+?\s+──)/g, '<span class="tx-room">$1</span>');
-  out = out.replace(/(보이는 것|출구|이곳에 있는 사람|적|체력|명령)(:)/g, '<span class="tx-label">$1</span>$2');
-  out = out.replace(/(\d+)(\s*\/\s*)(\d+)/g, '<span class="tx-hp">$1$2$3</span>');
-  out = out.replace(/(\d+)(의\s*피해)/g, '<span class="tx-dmg">$1</span>$2');
-  out = out.replace(/\b(north|south|east|west)\b/gi, '<span class="tx-dir">$1</span>');
-  out = out.replace(/(북쪽|남쪽|동쪽|서쪽)/g, '<span class="tx-dir">$1</span>');
-  out = out.replace(/(여행자\d+)/g, '<span class="tx-player">$1</span>');
-  out = out.replaceAll('\x00QSTART\x00', '<span class="tx-quote">').replaceAll('\x00QEND\x00', '</span>');
-  return out;
+  return escapeHtml(raw).replace(HIGHLIGHT_RE, (m, q, room, lbl, colon, hpA, hpSep, hpB, dmgN, dmgRest, dirEn, dirKo, traveler) => {
+    if (q !== undefined) return `<span class="tx-quote">${q}</span>`;
+    if (room !== undefined) return `<span class="tx-room">${room}</span>`;
+    if (lbl !== undefined) return `<span class="tx-label">${lbl}</span>${colon}`;
+    if (hpA !== undefined) return `<span class="tx-hp">${hpA}${hpSep}${hpB}</span>`;
+    if (dmgN !== undefined) return `<span class="tx-dmg">${dmgN}</span>${dmgRest}`;
+    if (dirEn !== undefined) return `<span class="tx-dir">${dirEn}</span>`;
+    if (dirKo !== undefined) return `<span class="tx-dir">${dirKo}</span>`;
+    if (traveler !== undefined) return `<span class="tx-player">${traveler}</span>`;
+    return m;
+  });
 }
 
 function appendLine(content, cls = 'line') {
@@ -1155,8 +1240,14 @@ function renderStatus(status) {
 
 // 장비 슬롯 렌더링을 별도 함수로 — 풀 status 수신 시와 status_delta 의
 // equipment 만 변동한 경우(equip/unequip) 양쪽이 같은 코드를 공유. innerHTML
-// 전체 비우기 + createElement 루프는 슬롯 5 개라 비용 작다.
+// 전체 비우기 + createElement 루프는 슬롯 5 개라 비용 작지만, 풀 status
+// (레벨업/리스폰/재접속) 가 인벤·장비 변동 없이 도착하는 경우가 잦아 fingerprint
+// 동일 시 skip — DOM mutation 자체를 회피한다.
+let lastEquipmentFp = null;
 function renderEquipment(equipment) {
+  const fp = JSON.stringify(equipment || {});
+  if (fp === lastEquipmentFp) return;
+  lastEquipmentFp = fp;
   equipmentEl.innerHTML = '';
   for (const [slot, label] of EQUIP_SLOTS) {
     const item = equipment?.[slot];
@@ -1179,9 +1270,13 @@ function renderEquipment(equipment) {
   }
 }
 
+let lastInventoryFp = null;
 function renderInventory(items) {
-  inventoryEl.innerHTML = '';
   const list = items || [];
+  const fp = JSON.stringify(list);
+  if (fp === lastInventoryFp) return;
+  lastInventoryFp = fp;
+  inventoryEl.innerHTML = '';
   if (list.length === 0) {
     const li = document.createElement('li');
     li.className = 'empty';
